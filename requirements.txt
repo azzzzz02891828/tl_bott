@@ -1,0 +1,3 @@
+telethon
+nest_asyncio
+requests
