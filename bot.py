@@ -1,11 +1,8 @@
 import os
 import asyncio
-import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 from telethon import TelegramClient, events, Button
-import nest_asyncio
-
-nest_asyncio.apply()
 
 # --- خادم وهمي لإبقاء الخدمة المجانية شغالة على Render ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -19,9 +16,7 @@ def start_health_check_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# تشغيل خادم الصحة في مسار مستقل (Thread)
 threading.Thread(target=start_health_check_server, daemon=True).start()
-
 
 # --- الثوابت الأساسية ---
 API_ID = 21727
@@ -249,8 +244,8 @@ async def auto_sender(event):
             print(f"⚠️ خطأ أثناء الإرسال الآلي: {e}")
 
 
-# --- دالة التشغيل الرئيسية ---
-async def main():
+# --- التشغيل المتوافق مع بايثون 3.14 ---
+async def start_bots():
     await admin_bot.start(bot_token=ADMIN_BOT_TOKEN)
     await client_bot.start(bot_token=CLIENT_BOT_TOKEN)
     print("🚀 جاري تشغيل بوتات التليجرام بنجاح...")
@@ -260,4 +255,6 @@ async def main():
     )
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_bots())
