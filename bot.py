@@ -4,6 +4,10 @@ from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
 from telethon import TelegramClient, events, Button
+import nest_asyncio
+
+# تفعيل حزمة تجاوز تعارض الـ Event Loop نهائياً
+nest_asyncio.apply()
 
 # --- 1. إعدادات خادم الـ HealthCheck للبقاء نشطاً 24/7 ---
 app = Flask('')
@@ -37,9 +41,7 @@ user_settings = {}
 admin_lines_data = {"words": [], "count": 1}
 
 # تهيئة عملاء تيليثون للبوتين
-# بوت التحكم (يدرّ الإدارة والتحكم)
 control_client = TelegramClient('control_bot_session', API_ID, API_HASH)
-# بوت المستخدمين (الخدمي للعملاء)
 user_client = TelegramClient('user_bot_session', API_ID, API_HASH)
 
 # ==================== بوت التحكم (Admin Bot) ====================
@@ -87,7 +89,6 @@ async def control_messages(event):
     text = event.raw_text.strip()
     
     if state == "waiting_for_admin_words":
-        # تنظيف الكلمات وفصلها
         words = [w.strip() for w in text.replace(',', ' ').split() if w.strip()]
         admin_lines_data["words"] = words
         user_states[sender_id] = "waiting_for_admin_count"
@@ -98,7 +99,7 @@ async def control_messages(event):
             count = int(text)
             admin_lines_data["count"] = count
             user_states.pop(sender_id, None)
-            await event.respond(f"✅ تم ضبط إعدادات السطور بنجاح: كل سطر سيتكون من {count} كلمات (بدون أي تكرار نهائياً).", buttons=get_control_menu())
+            await event.respond(f"✅ تم ضبط إعدادات السطور بنجاح: كل سطر سيتكون من {count} كلمات.", buttons=get_control_menu())
         else:
             await event.respond("❌ خطأ: يرجى إرسال رقم صحيح أكبر من الصفر:")
             
@@ -112,7 +113,6 @@ async def control_messages(event):
             except:
                 pass
         await event.respond(f"✅ تم إرسال الإذاعة بنجاح إلى {success_count} مشترك.", buttons=get_control_menu())
-
 
 # ==================== بوت المستخدمين (User Bot) ====================
 
@@ -131,7 +131,6 @@ async def user_start(event):
         await event.respond("أهلاً بك مجدداً! اختر ما يناسبك من القائمة:", buttons=get_user_menu())
         return
         
-    # فحص مهلة الدقيقة للطلبات المتكررة
     now = datetime.now()
     if sender_id in pending_requests:
         last_req = pending_requests[sender_id]
@@ -154,7 +153,6 @@ async def user_callbacks(event):
         user_id = int(data.split("_")[2])
         pending_requests[user_id] = datetime.now()
         
-        # إرسال طلب للأدمن في بوت التحكم مع أزرار القبول والرفض
         await control_client.send_message(
             ADMIN_ID,
             f"🔔 طلب تفعيل جديد من المستخدم: `{user_id}`",
@@ -165,7 +163,6 @@ async def user_callbacks(event):
         await event.answer("تم إرسال طلبك للمالك، يرجى الانتظار...", alert=True)
         return
 
-    # تفاعلات القائمة الرئيسية للمستخدم
     if sender_id not in approved_users:
         await event.answer("حسابك غير مفعل بعد!", alert=True)
         return
@@ -216,7 +213,6 @@ async def user_callbacks(event):
         await event.respond(status_text, buttons=get_user_menu())
         await event.answer()
 
-# معالجة قبول أو رفض الأدمن للطلبات الواردة من بوت التحكم
 @control_client.on(events.CallbackQuery)
 async def admin_decision_callbacks(event):
     if event.sender_id != ADMIN_ID:
