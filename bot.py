@@ -23,9 +23,9 @@ threading.Thread(target=start_health_check_server, daemon=True).start()
 API_ID = 39378042
 API_HASH = "d7358ec9f283c4151b0910efe90fdf8c"
 
-# --- بيانات التوثيق ---
-CLIENT_BOT_TOKEN = "8909604485:AAHpNrrzT852z_vK8H0q4v26kZ9H1mQz2sY"
-ADMIN_BOT_TOKEN = "8750783959:AAE4uk0M1EJvWw3Y1z2m3n4p5q6r7s8t9u0"
+# --- بيانات التوثيق الجديدة المحدثة ---
+CLIENT_BOT_TOKEN = "8876259033:AAHePjnxAJ90Ha6zZEEOIhdw6pVdV1Ecy50"
+ADMIN_BOT_TOKEN = "8965092843:AAHIjwMKVQQ0oDGEXysZTNsDQxX7dYGB0TU"
 ADMIN_ID = 5885382011
 
 # --- الكلمات والخصائص العامة للإدارة ---
