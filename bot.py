@@ -24,14 +24,13 @@ CONTROL_BOT_TOKEN = '8965092843:AAHIjwMKVQQ0oDGEXysZTNsDQxX7dYGB0TU'
 USER_BOT_TOKEN = '8876259033:AAHePjnxAJ90Ha6zZEEOIhdw6pVdV1Ecy50'
 
 user_states = {}
-approved_users = set()  # مجموعة المستخدمين المفعلين
-pending_requests = {}
+approved_users = set()
 admin_lines_data = {"words": [], "count": 1}
-temp_login_data = {}  # لتخزين جلسات تسجيل الدخول المؤقتة
+temp_login_data = {}
 
-# تعريف عملاء تيليثون للبوتين
+# تعريف بوت التحكم فقط للإقلاع (لن يحدث FloodWait أبدأ)
 control_client = TelegramClient('control_bot_session', API_ID, API_HASH)
-user_client = TelegramClient('user_bot_session', API_ID, API_HASH)
+user_bot_client = TelegramClient('user_bot_session_main', API_ID, API_HASH)
 
 # ==========================================
 # --- 3. لوحة تحكم بوت الإدارة (Control Bot) ---
@@ -60,7 +59,6 @@ async def control_callbacks(event):
             await event.answer("لا يوجد أي مشترك مفعل حالياً.", alert=True)
             return
         await event.answer("جاري استعراض المشتركين...")
-        # إرسال كل مشترك في رسالة منفصلة مع زر طرد/إلغاء تفعيل
         for uid in list(approved_users):
             sub_menu = [[Button.inline(f"❌ طرد / إلغاء تفعيل ({uid})", f"kick_{uid}".encode())]]
             await control_client.send_message(ADMIN_ID, f"👤 **معرف المشترك:** `{uid}`", buttons=sub_menu)
@@ -75,7 +73,6 @@ async def control_callbacks(event):
         await event.respond("📢 أرسل نص الإذاعة (سيُرسل مباشرة وبدون أي ملحقات):")
         await event.answer()
 
-# زر طرد المشترك من لوحة التحكم
 @control_client.on(events.CallbackQuery)
 async def kick_user_callback(event):
     if event.sender_id != ADMIN_ID:
@@ -86,14 +83,13 @@ async def kick_user_callback(event):
         if uid in approved_users:
             approved_users.remove(uid)
             try:
-                await user_client.send_message(uid, "❌ تم إلغاء تفعيل حسابك وطردك من قبل الإدارة.")
+                await user_bot_client.send_message(uid, "❌ تم إلغاء تفعيل حسابك وطردك من قبل الإدارة.")
             except:
                 pass
             await event.edit(f"✅ تم طرد المشترك `{uid}` بنجاح وإزالة تفعيله.")
         else:
             await event.answer("المشترك محذوف مسبقاً.", alert=True)
 
-# إدارة الردود النصية لبوت التحكم (الإذاعة والسطور)
 @control_client.on(events.NewMessage(incoming=True))
 async def control_messages(event):
     sender_id = event.sender_id
@@ -117,16 +113,14 @@ async def control_messages(event):
     elif state == "waiting_for_broadcast":
         user_states.pop(sender_id, None)
         success_count = 0
-        # الإذاعة ترسل النص صافياً ومباشرة بدون أي ملحقات
         for uid in approved_users:
             try:
-                await user_client.send_message(uid, text)
+                await user_bot_client.send_message(uid, text)
                 success_count += 1
             except:
                 pass
         await event.respond(f"✅ تم إرسال الإذاعة مباشرة إلى {success_count} مشترك.", buttons=get_control_menu())
 
-# استقبال طلبات التفعيل وقبولها أو رفضها من الأدمن
 @control_client.on(events.CallbackQuery)
 async def admin_approval_callbacks(event):
     if event.sender_id != ADMIN_ID:
@@ -135,21 +129,23 @@ async def admin_approval_callbacks(event):
     
     if data.startswith("acc_"):
         user_id = int(data.split("_")[1])
-        # لا نضيفه للمعتمدين نهائياً إلا بعد إتمام تسجيل دخوله برقم الجوال والكود بنجاح
         await control_client.send_message(user_id, "✅ تمت الموافقة على طلبك من الإدارة!\nالآن يرجى إرسال رقم هاتفك مع الرمز الدولي (مثال: `+9665xxxxxxxx`) لتسجيل الدخول:")
         user_states[user_id] = "waiting_for_phone"
-        await event.edit("✅ تم قبول الطلب، وتم طلب رقم الهاتف من المستخدم عبر بوت الخدمة.")
+        await event.edit("✅ تم قبول الطلب، وتم طلب رقم الهاتف من المستخدم.")
         
     elif data.startswith("rej_"):
         user_id = int(data.split("_")[1])
         user_states.pop(user_id, None)
-        await user_client.send_message(user_id, "❌ تم رفض طلب تفعيلك من الإدارة.")
+        try:
+            await user_bot_client.send_message(user_id, "❌ تم رفض طلب تفعيلك من الإدارة.")
+        except:
+            pass
         await event.edit("❌ تم رفض الطلب.")
 
 # ==========================================
 # --- 4. بوت الخدمات والمستخدمين (User Bot) ---
 # ==========================================
-@user_client.on(events.NewMessage(pattern='/start'))
+@user_bot_client.on(events.NewMessage(pattern='/start'))
 async def user_start(event):
     sender_id = event.sender_id
     if sender_id in approved_users:
@@ -159,17 +155,15 @@ async def user_start(event):
         await event.respond("أهلاً بك مجدداً. حسابك مفعل:", buttons=user_menu)
         return
 
-    # إرسال زر طلب التفعيل للأدمن
     await event.respond("أهلاً بك. انقر أدناه لطلب تفعيل حسابك:", buttons=[[Button.inline("🔓 طلب تفعيل الحساب", f"req_act_{sender_id}".encode())]])
 
-@user_client.on(events.CallbackQuery)
+@user_bot_client.on(events.CallbackQuery)
 async def user_button_actions(event):
     data = event.data.decode('utf-8')
     sender_id = event.sender_id
     
     if data.startswith("req_act_"):
         user_id = int(data.split("_")[2])
-        # إرسال إشعار للأدمن في بوت التحكم مع أزرار القبول والرفض
         await control_client.send_message(
             ADMIN_ID, 
             f"🔔 طلب تفعيل جديد من المستخدم: `{user_id}`", 
@@ -191,8 +185,7 @@ async def user_button_actions(event):
         await event.respond("🟢 يرجى إرسال الكلمة التي تريدها لكي تشغلها (#11):")
         await event.answer()
 
-# خطوات استقبال رقم الهاتف وتجريح الكود في بوت المستخدم
-@user_client.on(events.NewMessage(incoming=True))
+@user_bot_client.on(events.NewMessage(incoming=True))
 async def user_login_steps(event):
     sender_id = event.sender_id
     if sender_id == ADMIN_ID or sender_id not in user_states:
@@ -207,7 +200,6 @@ async def user_login_steps(event):
         await event.respond("⏳ جاري إرسال رمز التحقق إلى حسابك في تليجرام...")
         
         try:
-            # إنشاء عميل مؤقت خاص بهذا المستخدم لطلب الكود
             session_name = f"user_session_{sender_id}"
             client = TelegramClient(session_name, API_ID, API_HASH)
             await client.connect()
@@ -239,7 +231,6 @@ async def user_login_steps(event):
             user_states.pop(sender_id, None)
             temp_login_data.pop(sender_id, None)
             
-            # تسجيل الدخول نجح، نضيفه للمعتمدين ونظهر له القائمة
             approved_users.add(sender_id)
             user_menu = [
                 [Button.inline("🔴 الإيقاف (#22)", b"btn_stop"), Button.inline("🟢 التشغيل (#11)", b"btn_start")]
@@ -293,12 +284,12 @@ async def main():
 
     print("Starting Telegram clients...")
     await control_client.start(bot_token=CONTROL_BOT_TOKEN)
-    await user_client.start(bot_token=USER_BOT_TOKEN)
+    await user_bot_client.start(bot_token=USER_BOT_TOKEN)
     print("Both bots are running successfully!")
 
     await asyncio.gather(
         control_client.run_until_disconnected(),
-        user_client.run_until_disconnected()
+        user_bot_client.run_until_disconnected()
     )
 
 if __name__ == '__main__':
