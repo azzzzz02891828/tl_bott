@@ -3,6 +3,7 @@ import asyncio
 from flask import Flask
 from threading import Thread
 from telethon import TelegramClient, events, Button
+from telethon.sessions import StringSession
 
 # --- 1. خادم الـ HealthCheck المستقل ---
 app = Flask('')
@@ -22,13 +23,12 @@ ADMIN_ID = 5885382011
 
 CONTROL_BOT_TOKEN = '8965092843:AAHIjwMKVQQ0oDGEXysZTNsDQxX7dYGB0TU'
 
-# قواميس حفظ الحالات والبيانات بدقة تامة
 user_states = {}       
 temp_login_data = {}   
-approved_users = set() # المشتركين الفعليين الذين تم ربط حساباتهم بنجاح فقط
+approved_users = set() 
 admin_lines_data = {"words": [], "count": 1}
 
-client = TelegramClient('main_bot_session', API_ID, API_HASH)
+client = TelegramClient(StringSession(), API_ID, API_HASH)
 
 def get_control_menu():
     return [
@@ -40,12 +40,10 @@ def get_control_menu():
 async def main_start(event):
     sender_id = event.sender_id
 
-    # لوحة تحكم المالك (الأدمن)
     if sender_id == ADMIN_ID:
         await event.respond("أهلاً بك يا مالك البوت في لوحة التحكم الإدارية:", buttons=get_control_menu())
         return
 
-    # إذا كان المستخدم مفعل مسبقاً وحسابه مرتبط
     if sender_id in approved_users:
         user_menu = [
             [Button.inline("🔴 الإيقاف (#22)", b"btn_stop"), Button.inline("🟢 التشغيل (#11)", b"btn_start")]
@@ -53,7 +51,6 @@ async def main_start(event):
         await event.respond("أهلاً بك مجدداً. حسابك مرتبط ومفعل:", buttons=user_menu)
         return
 
-    # فحص حالة المستخدم الحالية لعدم تكرار الرسائل وإعادته لنفس خطوته تماماً
     current_state = user_states.get(sender_id)
 
     if current_state == "pending":
@@ -69,7 +66,6 @@ async def main_start(event):
         await event.respond("يرجى إرسال كلمة المرور (التحقق بخطوتين):")
         return
 
-    # إذا لم يطلب من قبل، يظهر له زر طلب التفعيل لمرة واحدة
     user_states[sender_id] = "not_requested"
     await event.respond("أهلاً بك. انقر أدناه لطلب تفعيل حسابك:", buttons=[[Button.inline("🔓 طلب تفعيل الحساب", b"req_activation")]])
 
@@ -78,7 +74,6 @@ async def callback_handler(event):
     sender_id = event.sender_id
     data = event.data.decode('utf-8')
 
-    # أزرار الأدمن
     if sender_id == ADMIN_ID:
         if data == "admin_subs":
             if not approved_users:
@@ -111,9 +106,7 @@ async def callback_handler(event):
         elif data.startswith("acc_"):
             user_id = int(data.split("_")[1])
             user_states[user_id] = "waiting_phone"
-            # تأكيد للأدمن في رسالته الخاصة
             await event.edit(f"✅ تم قبول الطلب للمستخدم `{user_id}`، وتم طلب رقم الهاتف منه عبر الشات الخاص به.")
-            # إرسال طلب رقم الهاتف حصرياً للمستخدم صاحب الطلب
             await client.send_message(user_id, "✅ تمت الموافقة على طلبك من الإدارة!\nالآن يرجى إرسال رقم هاتفك مع الرمز الدولي (مثال: `+9665xxxxxxxx`) لتسجيل الدخول:")
         elif data.startswith("rej_"):
             user_id = int(data.split("_")[1])
@@ -125,7 +118,6 @@ async def callback_handler(event):
                 pass
         return
 
-    # أزرار المستخدمين العاديين
     if data == "req_activation":
         if user_states.get(sender_id) == "pending":
             await event.answer("لقد أرسلت طلباً مسبقاً، بانتظار رد الإدارة.", alert=True)
@@ -160,7 +152,6 @@ async def message_router(event):
     if text.startswith('/'):
         return  
 
-    # معالجة إدخالات الأدمن
     if sender_id == ADMIN_ID:
         state = user_states.get(ADMIN_ID)
         if state == "waiting_for_admin_words":
@@ -187,7 +178,6 @@ async def message_router(event):
             await event.respond(f"✅ تم إرسال الإذاعة مباشرة إلى {success_count} مشترك مفعل.", buttons=get_control_menu())
         return
 
-    # معالجة خطوات المستخدمين بناءً على حالتهم
     state = user_states.get(sender_id)
 
     if state == "waiting_phone":
@@ -196,7 +186,8 @@ async def message_router(event):
         await event.respond("⏳ جاري إرسال رمز التحقق إلى حسابك في تليجرام...")
         
         try:
-            user_session_client = TelegramClient(f"user_session_{sender_id}", API_ID, API_HASH)
+            # استخدام StringSession لكل مستخدم لمنع أي تداخل أو FloodWait محلي
+            user_session_client = TelegramClient(StringSession(), API_ID, API_HASH)
             await user_session_client.connect()
             sent_code = await user_session_client.send_code_request(phone)
             temp_login_data[sender_id] = {
@@ -207,7 +198,7 @@ async def message_router(event):
             await event.respond("✅ تم إرسال الرمز بنجاح. يرجى إرسال رمز التحقق:")
         except Exception as e:
             user_states[sender_id] = "waiting_phone"
-            await event.respond(f"❌ حدث خطأ: {str(e)}\nيرجى إعادة إرسال رقم الهاتف بشكل صحيح:")
+            await event.respond(f"❌ حدث خطأ (قد يكون بسبب كثرة المحاولات، انتظر قليلأً):\n{str(e)}\nيرجى إعادة إرسال رقم الهاتف:")
 
     elif state == "waiting_code":
         code = text
