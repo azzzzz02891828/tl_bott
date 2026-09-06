@@ -1,5 +1,6 @@
 import os
 import asyncio
+import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 from telethon import TelegramClient, events, Button
@@ -19,19 +20,17 @@ def start_health_check_server():
 threading.Thread(target=start_health_check_server, daemon=True).start()
 
 # --- الثوابت الأساسية ---
-API_ID = 21727
-API_HASH = "338d4380b2c15904fa77cfcb251d19d6"
+API_ID = 39378042
+API_HASH = "d7358ec9f283c4151b0910efe90fdf8c"
 
 # --- بيانات التوثيق ---
 CLIENT_BOT_TOKEN = "8909604485:AAHpNrrzT852z_vK8H0q4v26kZ9H1mQz2sY"
 ADMIN_BOT_TOKEN = "8750783959:AAE4uk0M1EJvWw3Y1z2m3n4p5q6r7s8t9u0"
 ADMIN_ID = 5885382011
 
-# --- السطور الافتراضية العامة ---
-admin_custom_lines = [
-    "الخط الساخن الأول: مرحباً بالجميع",
-    "الخط الساخن الثاني: النظام يعمل بكفاءة عالية"
-]
+# --- الكلمات والخصائص العامة للإدارة ---
+admin_words_pool = ["السلام", "عليكم", "ورحمة", "الله", "وبركاته", "يا", "سادة", "باي"]
+generation_word_count = 2  # عدد الكلمات الافتراضي في كل سطر
 
 user_sessions = {}
 pending_approvals = {}
@@ -41,7 +40,30 @@ admin_bot = TelegramClient('admin_bot_session', API_ID, API_HASH)
 client_bot = TelegramClient('client_bot_session', API_ID, API_HASH)
 
 
-# --- بوت التحكم (الإدارة) ---
+# --- دوام توليد السطور الفريدة بدون تكرار ---
+def generate_unique_sentences(words_list, words_per_line, total_lines=5):
+    if not words_list:
+        return ["لا توجد كلمات مضافة حالياً."]
+    
+    pool = words_list.copy()
+    random.shuffle(pool)
+    
+    sentences = []
+    i = 0
+    while i < len(pool):
+        chunk = pool[i:i + words_per_line]
+        if len(chunk) < words_per_line and len(pool) >= words_per_line:
+            # إذا بقي عدد أقل من المطلوب، نكمل من البداية لضمان الاكتمال
+            needed = words_per_line - len(chunk)
+            chunk.extend(pool[:needed])
+        sentences.append(" ".join(chunk))
+        i += words_per_line
+        if len(sentences) >= total_lines:
+            break
+    return sentences
+
+
+# --- بوت التحكم (الإدارة): إضافة كلمات، تحديد العدد، إدارة المشتركين ---
 @admin_bot.on(events.NewMessage(pattern='/lines'))
 async def manage_lines(event):
     if event.sender_id != ADMIN_ID:
@@ -49,25 +71,82 @@ async def manage_lines(event):
     
     args = event.raw_text.split(maxsplit=2)
     if len(args) < 2:
-        lines_text = "\n".join([f"{i+1}. {line}" for i, line in enumerate(admin_custom_lines)])
-        if not lines_text:
-            lines_text = "لا توجد أي سطور حالياً."
-        await event.respond(f"📋 **السطور العامة الحالية:**\n\n{lines_text}\n\nلإضافة سطر جديد:\n`/lines add النص هنا`\n\nلمسح جميع السطور:\n`/lines clear`")
+        words_str = ", ".join(admin_words_pool) if admin_words_pool else "فارغة"
+        await event.respond(
+            f"📋 **لوحة تحكم الكلمات:**\n\n"
+            f"🔤 **الكلمات الحالية:** [{words_str}]\n"
+            f"🔢 **عدد الكلمات في كل سطر:** `{generation_word_count}`\n\n"
+            f"**الأوامر المتاحة:**\n"
+            f"1️⃣ لإضافة كلمة: `/lines add كلمة`\n"
+            f"2️⃣ لتحديد عدد الكلمات بالسطر: `/lines count 2`\n"
+            f"3️⃣ لمسح جميع الكلمات: `/lines clear`"
+        )
         return
 
     command = args[1]
     if command == "add" and len(args) > 2:
-        new_line = args[2]
-        admin_custom_lines.append(new_line)
-        await event.respond(f"✅ تمت إضافة السطر بنجاح:\n`{new_line}`")
+        new_word = args[2].strip()
+        admin_words_pool.append(new_word)
+        await event.respond(f"✅ تمت إضافة الكلمة بنجاح: `{new_word}`")
+    elif command == "count" and len(args) > 2:
+        try:
+            cnt = int(args[2])
+            global generation_word_count
+            generation_word_count = cnt
+            await event.respond(f"✅ تم تحديث عدد الكلمات في كل سطر إلى: `{cnt}`")
+        except ValueError:
+            await event.respond("❌ يرجى إدخال رقم صحيح (مثال: `/lines count 2`)")
     elif command == "clear":
-        admin_custom_lines.clear()
-        await event.respond("🗑️ تم مسح جميع السطور العامة بنجاح.")
+        admin_words_pool.clear()
+        await event.respond("🗑️ تم مسح جميع الكلمات بنجاح.")
     else:
-        await event.respond("❌ أمر غير معروف. استخدم `/lines` لعرض التعليمات.")
+        await event.respond("❌ أمر غير معروف. اكتب `/lines` لعرض القائمة.")
 
 
-# --- بوت العميل ---
+@admin_bot.on(events.NewMessage(pattern='/users'))
+async def list_approved_users(event):
+    if event.sender_id != ADMIN_ID:
+        return
+    
+    approved_list = [uid for uid, data in user_sessions.items() if data.get("status") == "approved"]
+    if not approved_list:
+        await event.respond("📂 لا يوجد أي مشتركين مفعلين حالياً.")
+        return
+    
+    text = "👥 **المشتركون الحاليون (اضغط لطرد أي منهم):**\n\n"
+    buttons = []
+    for uid in approved_list:
+        phone = user_sessions[uid].get("phone", "غير متوفر")
+        text += f"- الآيدي: `{uid}` (الرقم: {phone})\n"
+        buttons.append([Button.inline(f"طرد المشترك {uid}", data=f"kick_user_{uid}".encode())])
+    
+    await event.respond(text, buttons=buttons)
+
+
+@admin_bot.on(events.CallbackQuery(pattern=b"kick_user_"))
+async def kick_user(event):
+    if event.sender_id != ADMIN_ID:
+        await event.answer("غير مسموح.", alert=True)
+        return
+    
+    try:
+        user_id = int(event.data.decode().split("_")[2])
+        if user_id in user_sessions:
+            del user_sessions[user_id]
+            if user_id in user_settings:
+                del user_settings[user_id]
+            await event.edit(f"🚫 تم طرد المستخدم `{user_id}` وإلغاء صلاحياته بنجاح.")
+            try:
+                await client_bot.send_message(user_id, "⚠️ عذراً، تم إلغاء تفعيل حسابك بواسطة الإدارة.")
+            except:
+                pass
+        else:
+            await event.answer("المستخدم غير موجود أو تم حذفه مسبقاً.", alert=True)
+    except Exception as e:
+        await event.answer(f"حدث خطأ: {e}", alert=True)
+
+
+# --- بوت العميل: طلب تسجيل الدخول ---
 @client_bot.on(events.NewMessage(pattern='/start'))
 async def client_start(event):
     user_id = event.sender_id
@@ -86,6 +165,7 @@ async def handle_phone(event):
         return
 
     phone = event.raw_text.strip()
+    user_sessions[user_id]["phone"] = phone
     await event.respond("⏳ جاري إرسال رمز التحقق إلى حسابك في تليجرام...")
 
     try:
@@ -132,7 +212,8 @@ async def handle_code(event):
             else:
                 raise sign_in_error
 
-        user_sessions[user_id] = {"userbot": temp_client, "status": "pending_admin"}
+        user_sessions[user_id]["userbot"] = temp_client
+        user_sessions[user_id]["status"] = "pending_admin"
         
         await admin_bot.send_message(
             ADMIN_ID,
@@ -160,7 +241,8 @@ async def handle_password(event):
         temp_client = data["client"]
         await temp_client.sign_in(password=password)
         
-        user_sessions[user_id] = {"userbot": temp_client, "status": "pending_admin"}
+        user_sessions[user_id]["userbot"] = temp_client
+        user_sessions[user_id]["status"] = "pending_admin"
         
         await admin_bot.send_message(
             ADMIN_ID,
@@ -179,9 +261,7 @@ async def admin_approve(event):
         return
 
     try:
-        data_bytes = event.data
-        user_id = int(data_bytes.decode().split("_")[2])
-        
+        user_id = int(event.data.decode().split("_")[2])
         if user_id in user_sessions:
             user_sessions[user_id]["status"] = "approved"
             user_settings[user_id] = {"speed": 2, "trigger": ".مرسل"}
@@ -189,10 +269,10 @@ async def admin_approve(event):
             await event.edit("✅ تمت الموافقة على تفعيل المستخدم بنجاح!")
             await client_bot.send_message(
                 user_id,
-                "🎉 تمت الموافقة على حسابك بنجاح بواسطة الإدارة!\n\nيمكنك الآن إرسال كلمتك المفتاحية في أي شات لبدء إرسال السطور التلقائية.\nالأوامر المتاحة:\n`/speed [ثواني]`\n`/trigger [الكلمة]`"
+                "🎉 تمت الموافقة على حسابك بنجاح!\n\nيمكنك الآن إرسال كلمتك المفتاحية في أي شات لبدء إرسال الكلمات.\nالأوامر المتاحة:\n`/speed [ثواني]`\n`/trigger [الكلمة]`"
             )
         else:
-            await event.answer("انتهت الجلسة أو المستخدم غير مسجل.", alert=True)
+            await event.answer("انتهت الجلسة أو تم طرد المستخدم.", alert=True)
     except Exception as e:
         await event.answer(f"حدث خطأ: {e}", alert=True)
 
@@ -220,6 +300,7 @@ async def set_trigger(event):
     await event.respond(f"🔑 تم تحديث الكلمة المفتاحية إلى: `{new_trig}`")
 
 
+# --- إرسال الكلمات الفريدة عند كتابة الكلمة المفتاحية ---
 @client_bot.on(events.NewMessage(func=lambda e: e.is_private is False))
 async def auto_sender(event):
     user_id = event.sender_id
@@ -236,7 +317,10 @@ async def auto_sender(event):
             chat = await event.get_chat()
             userbot = user_sessions[user_id]["userbot"]
 
-            for line in admin_custom_lines:
+            # توليد الأسطر غير المتكررة بالعدد المحدد من الإدارة
+            dynamic_lines = generate_unique_sentences(admin_words_pool, generation_word_count, total_lines=len(admin_words_pool))
+
+            for line in dynamic_lines:
                 await userbot.send_message(chat, line)
                 await asyncio.sleep(speed)
 
@@ -244,7 +328,7 @@ async def auto_sender(event):
             print(f"⚠️ خطأ أثناء الإرسال الآلي: {e}")
 
 
-# --- التشغيل المتوافق مع بايثون 3.14 ---
+# --- التشغيل ---
 async def start_bots():
     await admin_bot.start(bot_token=ADMIN_BOT_TOKEN)
     await client_bot.start(bot_token=CLIENT_BOT_TOKEN)
