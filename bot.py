@@ -24,7 +24,6 @@ ADMIN_ID = 5885382011
 
 CONTROL_BOT_TOKEN = '8965092843:AAHIjwMKVQQ0oDGEXysZTNsDQxX7dYGB0TU'
 
-# القواميس لحفظ الحالات
 user_states = {}       
 temp_login_data = {}   
 approved_users = set() 
@@ -38,122 +37,45 @@ def get_control_menu():
         [Button.inline("📝 إدارة السطور", b"admin_lines")]
     ]
 
-@client.on(events.NewMessage(pattern='/start'))
-async def main_start(event):
-    sender_id = event.sender_id
-
-    if sender_id == ADMIN_ID:
-        await event.respond("أهلاً بك يا مالك البوت في لوحة التحكم الإدارية:", buttons=get_control_menu())
-        return
-
-    if sender_id in approved_users:
-        user_menu = [
-            [Button.inline("🔴 الإيقاف (#22)", b"btn_stop"), Button.inline("🟢 التشغيل (#11)", b"btn_start")]
-        ]
-        await event.respond("أهلاً بك مجدداً. حسابك مرتبط ومفعل:", buttons=user_menu)
-        return
-
-    current_state = user_states.get(sender_id)
-
-    if current_state == "pending":
-        await event.respond("⏳ طلب تفعيل حسابك قيد المراجعة من الإدارة، بانتظار الموافقة.")
-        return
-    elif current_state == "waiting_phone":
-        await event.respond("يرجى إرسال رقم هاتفك مع الرمز الدولي (مثال: `+9665xxxxxxxx`) لتسجيل الدخول:")
-        return
-    elif current_state == "waiting_code":
-        await event.respond("يرجى إرسال رمز التحقق الذي وصلك على تليجرام:")
-        return
-    elif current_state == "waiting_2fa":
-        await event.respond("يرجى إرسال كلمة المرور (التحقق بخطوتين):")
-        return
-
-    user_states[sender_id] = "not_requested"
-    await event.respond("أهلاً بك. انقر أدناه لطلب تفعيل حسابك:", buttons=[[Button.inline("🔓 طلب تفعيل الحساب", b"req_activation")]])
-
-@client.on(events.CallbackQuery)
-async def callback_handler(event):
-    sender_id = event.sender_id
-    data = event.data.decode('utf-8')
-
-    if sender_id == ADMIN_ID:
-        if data == "admin_subs":
-            if not approved_users:
-                await event.answer("لا يوجد أي مشترك مفعل ومرتبط حالياً.", alert=True)
-                return
-            await event.answer("جاري استعراض المشتركين المفعلين...")
-            for uid in list(approved_users):
-                sub_menu = [[Button.inline(f"❌ طرد / إلغاء تفعيل ({uid})", f"kick_{uid}".encode())]]
-                await client.send_message(ADMIN_ID, f"👤 **معرف المشترك المفعل:** `{uid}`", buttons=sub_menu)
-        elif data == "admin_lines":
-            user_states[ADMIN_ID] = "waiting_for_admin_words"
-            await event.respond("📝 أرسل الآن الكلمات للسطور:")
-            await event.answer()
-        elif data == "admin_broadcast":
-            user_states[ADMIN_ID] = "waiting_for_broadcast"
-            await event.respond("📢 أرسل نص الإذاعة (سيُرسل مباشرة وبدون أي ملحقات):")
-            await event.answer()
-        elif data.startswith("kick_"):
-            uid = int(data.split("_")[1])
-            if uid in approved_users:
-                approved_users.remove(uid)
-                user_states[uid] = "kicked"
-                try:
-                    await client.send_message(uid, "❌ تم إلغاء تفعيل حسابك وطردك من قبل الإدارة.")
-                except:
-                    pass
-                await event.edit(f"✅ تم طرد المشترك `{uid}` وإزالة تفعيله بنجاح.")
-            else:
-                await event.answer("المشترك محذوف مسبقاً.", alert=True)
-        elif data.startswith("acc_"):
-            user_id = int(data.split("_")[1])
-            user_states[user_id] = "waiting_phone"
-            await event.edit(f"✅ تم قبول الطلب للمستخدم `{user_id}`، وتم طلب رقم الهاتف منه عبر الشات الخاص به.")
-            await client.send_message(user_id, "✅ تمت الموافقة على طلبك من الإدارة!\nالآن يرجى إرسال رقم هاتفك مع الرمز الدولي (مثال: `+9665xxxxxxxx`) لتسجيل الدخول:")
-        elif data.startswith("rej_"):
-            user_id = int(data.split("_")[1])
-            user_states[user_id] = "rejected"
-            await event.edit(f"❌ تم رفض الطلب للمستخدم `{user_id}`.")
-            try:
-                await client.send_message(user_id, "❌ تم رفض طلب تفعيلك من الإدارة.")
-            except:
-                pass
-        return
-
-    if data == "req_activation":
-        if user_states.get(sender_id) == "pending":
-            await event.answer("لقد أرسلت طلباً مسبقاً، بانتظار رد الإدارة.", alert=True)
-            return
-        user_states[sender_id] = "pending"
-        await client.send_message(
-            ADMIN_ID, 
-            f"🔔 طلب تفعيل جديد من المستخدم: `{sender_id}`", 
-            buttons=[[Button.inline("✅ قبول", f"acc_{sender_id}".encode()), Button.inline("❌ رفض", f"rej_{sender_id}".encode())]]
-        )
-        await event.answer("تم إرسال طلب التفعيل إلى المالك بنجاح.", alert=True)
-        return
-
-    if sender_id not in approved_users:
-        await event.answer("حسابك غير مفعل أو لم يكتمل ربطه بعد!", alert=True)
-        return
-
-    if data == "btn_stop":
-        user_states[sender_id] = "waiting_stop_word"
-        await event.respond("🔴 يرجى إرسال الكلمة التي تريدها لكي توقفها (#22):")
-        await event.answer()
-    elif data == "btn_start":
-        user_states[sender_id] = "waiting_start_word"
-        await event.respond("🟢 يرجى إرسال الكلمة التي تريدها لكي تشغلها (#11):")
-        await event.answer()
-
+# معالج موحد لكل الرسائل والأوامر لمنع أي تعليق أو تجاهل
 @client.on(events.NewMessage(incoming=True))
 async def message_router(event):
     sender_id = event.sender_id
-    text = event.raw_text.strip()
-    
-    if text.startswith('/'):
-        return  
+    text = event.raw_text.strip() if event.raw_text else ""
 
+    # 1. معالجة أمر البداية /start
+    if text == '/start':
+        if sender_id == ADMIN_ID:
+            await event.respond("أهلاً بك يا مالك البوت في لوحة التحكم الإدارية:", buttons=get_control_menu())
+            return
+
+        if sender_id in approved_users:
+            user_menu = [
+                [Button.inline("🔴 الإيقاف (#22)", b"btn_stop"), Button.inline("🟢 التشغيل (#11)", b"btn_start")]
+            ]
+            await event.respond("أهلاً بك مجدداً. حسابك مرتبط ومفعل:", buttons=user_menu)
+            return
+
+        current_state = user_states.get(sender_id)
+
+        if current_state == "pending":
+            await event.respond("⏳ طلب تفعيل حسابك قيد المراجعة من الإدارة، بانتظار الموافقة.")
+            return
+        elif current_state == "waiting_phone":
+            await event.respond("يرجى إرسال رقم هاتفك مع الرمز الدولي (مثال: `+9665xxxxxxxx`) لتسجيل الدخول:")
+            return
+        elif current_state == "waiting_code":
+            await event.respond("يرجى إرسال رمز التحقق الذي وصلك على تليجرام:")
+            return
+        elif current_state == "waiting_2fa":
+            await event.respond("يرجى إرسال كلمة المرور (التحقق بخطوتين):")
+            return
+
+        user_states[sender_id] = "not_requested"
+        await event.respond("أهلاً بك. انقر أدناه لطلب تفعيل حسابك:", buttons=[[Button.inline("🔓 طلب تفعيل الحساب", b"req_activation")]])
+        return
+
+    # 2. معالجة إدخالات الأدمن النصية
     if sender_id == ADMIN_ID:
         state = user_states.get(ADMIN_ID)
         if state == "waiting_for_admin_words":
@@ -180,6 +102,7 @@ async def message_router(event):
             await event.respond(f"✅ تم إرسال الإذاعة مباشرة إلى {success_count} مشترك مفعل.", buttons=get_control_menu())
         return
 
+    # 3. معالجة خطوات تسجيل الدخول للمستخدمين
     state = user_states.get(sender_id)
 
     if state == "waiting_phone":
@@ -259,6 +182,82 @@ async def message_router(event):
         word = text
         user_menu = [[Button.inline("🔴 الإيقاف (#22)", b"btn_stop"), Button.inline("🟢 التشغيل (#11)", b"btn_start")]]
         await event.respond(f"✅ تم تطبيق أمر التشغيل (#11) للكلمة: {word}", buttons=user_menu)
+
+# معالج الأزرار التفاعلية
+@client.on(events.CallbackQuery)
+async def callback_handler(event):
+    sender_id = event.sender_id
+    data = event.data.decode('utf-8')
+
+    if sender_id == ADMIN_ID:
+        if data == "admin_subs":
+            if not approved_users:
+                await event.answer("لا يوجد أي مشترك مفعل ومرتبط حالياً.", alert=True)
+                return
+            await event.answer("جاري استعراض المشتركين المفعلين...")
+            for uid in list(approved_users):
+                sub_menu = [[Button.inline(f"❌ طرد / إلغاء تفعيل ({uid})", f"kick_{uid}".encode())]]
+                await client.send_message(ADMIN_ID, f"👤 **معرف المشترك المفعل:** `{uid}`", buttons=sub_menu)
+        elif data == "admin_lines":
+            user_states[ADMIN_ID] = "waiting_for_admin_words"
+            await event.respond("📝 أرسل الآن الكلمات للسطور:")
+            await event.answer()
+        elif data == "admin_broadcast":
+            user_states[ADMIN_ID] = "waiting_for_broadcast"
+            await event.respond("📢 أرسل نص الإذاعة (سيُرسل مباشرة وبدون أي ملحقات):")
+            await event.answer()
+        elif data.startswith("kick_"):
+            uid = int(data.split("_")[1])
+            if uid in approved_users:
+                approved_users.remove(uid)
+                user_states[uid] = "kicked"
+                try:
+                    await client.send_message(uid, "❌ تم إلغاء تفعيل حسابك وطردك من قبل الإدارة.")
+                except:
+                    pass
+                await event.edit(f"✅ تم طرد المشترك `{uid}` وإزالة تفعيله بنجاح.")
+            else:
+                await event.answer("المشترك محذوف مسبقاً.", alert=True)
+        elif data.startswith("acc_"):
+            user_id = int(data.split("_")[1])
+            user_states[user_id] = "waiting_phone"
+            await event.edit(f"✅ تم قبول الطلب للمستخدم `{user_id}`، وتم طلب رقم الهاتف منه عبر الشات الخاص به.")
+            await client.send_message(user_id, "✅ تمت الموافقة على طلبك من الإدارة!\nالآن يرجى إرسال رقم هاتفك مع الرمز الدولي (مثال: `+9665xxxxxxxx`) لتسجيل الدخول:")
+        elif data.startswith("rej_"):
+            user_id = int(data.split("_")[1])
+            user_states[user_id] = "rejected"
+            await event.edit(f"❌ تم رفض الطلب للمستخدم `{user_id}`.")
+            try:
+                await client.send_message(user_id, "❌ تم رفض طلب تفعيلك من الإدارة.")
+            except:
+                pass
+        return
+
+    if data == "req_activation":
+        if user_states.get(sender_id) == "pending":
+            await event.answer("لقد أرسلت طلباً مسبقاً، بانتظار رد الإدارة.", alert=True)
+            return
+        user_states[sender_id] = "pending"
+        await client.send_message(
+            ADMIN_ID, 
+            f"🔔 طلب تفعيل جديد من المستخدم: `{sender_id}`", 
+            buttons=[[Button.inline("✅ قبول", f"acc_{sender_id}".encode()), Button.inline("❌ رفض", f"rej_{sender_id}".encode())]]
+        )
+        await event.answer("تم إرسال طلب التفعيل إلى المالك بنجاح.", alert=True)
+        return
+
+    if sender_id not in approved_users:
+        await event.answer("حسابك غير مفعل أو لم يكتمل ربطه بعد!", alert=True)
+        return
+
+    if data == "btn_stop":
+        user_states[sender_id] = "waiting_stop_word"
+        await event.respond("🔴 يرجى إرسال الكلمة التي تريدها لكي توقفها (#22):")
+        await event.answer()
+    elif data == "btn_start":
+        user_states[sender_id] = "waiting_start_word"
+        await event.respond("🟢 يرجى إرسال الكلمة التي تريدها لكي تشغلها (#11):")
+        await event.answer()
 
 async def main():
     flask_thread = Thread(target=run_flask)
