@@ -1,3 +1,4 @@
 telethon
+flask
 nest_asyncio
 requests
