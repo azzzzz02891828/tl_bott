@@ -40,7 +40,7 @@ admin_bot = TelegramClient('admin_bot_session', API_ID, API_HASH)
 client_bot = TelegramClient('client_bot_session', API_ID, API_HASH)
 
 
-# --- دوام توليد السطور الفريدة بدون تكرار ---
+# --- دالة توليد السطور الفريدة بدون تكرار ---
 def generate_unique_sentences(words_list, words_per_line, total_lines=5):
     if not words_list:
         return ["لا توجد كلمات مضافة حالياً."]
@@ -53,7 +53,6 @@ def generate_unique_sentences(words_list, words_per_line, total_lines=5):
     while i < len(pool):
         chunk = pool[i:i + words_per_line]
         if len(chunk) < words_per_line and len(pool) >= words_per_line:
-            # إذا بقي عدد أقل من المطلوب، نكمل من البداية لضمان الاكتمال
             needed = words_per_line - len(chunk)
             chunk.extend(pool[:needed])
         sentences.append(" ".join(chunk))
@@ -69,6 +68,7 @@ async def manage_lines(event):
     if event.sender_id != ADMIN_ID:
         return
     
+    global generation_word_count
     args = event.raw_text.split(maxsplit=2)
     if len(args) < 2:
         words_str = ", ".join(admin_words_pool) if admin_words_pool else "فارغة"
@@ -91,7 +91,6 @@ async def manage_lines(event):
     elif command == "count" and len(args) > 2:
         try:
             cnt = int(args[2])
-            global generation_word_count
             generation_word_count = cnt
             await event.respond(f"✅ تم تحديث عدد الكلمات في كل سطر إلى: `{cnt}`")
         except ValueError:
@@ -317,7 +316,6 @@ async def auto_sender(event):
             chat = await event.get_chat()
             userbot = user_sessions[user_id]["userbot"]
 
-            # توليد الأسطر غير المتكررة بالعدد المحدد من الإدارة
             dynamic_lines = generate_unique_sentences(admin_words_pool, generation_word_count, total_lines=len(admin_words_pool))
 
             for line in dynamic_lines:
