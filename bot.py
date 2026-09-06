@@ -4,20 +4,16 @@ from flask import Flask
 from threading import Thread
 from telethon import TelegramClient, events, Button
 
-# --- 1. خادم الـ HealthCheck ---
+# --- 1. خادم الـ HealthCheck المستقل ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bots are running!"
+    return "Bots are running 24/7!"
 
 def run_flask():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
 
 # --- 2. الإعدادات والتوكنات ---
 API_ID = 39378042
@@ -37,7 +33,7 @@ admin_lines_data = {"words": [], "count": 1}
 control_client = TelegramClient('control_bot_session', API_ID, API_HASH)
 user_client = TelegramClient('user_bot_session', API_ID, API_HASH)
 
-# --- دوال البوتات (نفسها تماماً بدون أي نقص) ---
+# --- دوال بوت التحكم (Admin Bot) ---
 def get_control_menu():
     return [
         [Button.inline("👥 عدد المشتركين", b"admin_subs"), Button.inline("📢 الإذاعة الجماعية", b"admin_broadcast")],
@@ -83,7 +79,7 @@ async def control_messages(event):
         if text.isdigit() and int(text) > 0:
             admin_lines_data["count"] = int(text)
             user_states.pop(sender_id, None)
-            await event.respond(f"✅ تم ضبط إعدادات السطور.", buttons=get_control_menu())
+            await event.respond("✅ تم ضبط إعدادات السطور.", buttons=get_control_menu())
         else:
             await event.respond("❌ أرسل رقماً صحيحاً أكبر من الصفر:")
     elif state == "waiting_for_broadcast":
@@ -97,6 +93,7 @@ async def control_messages(event):
                 pass
         await event.respond(f"✅ تم إرسال الإذاعة إلى {success_count} مشترك.", buttons=get_control_menu())
 
+# --- دوال بوت المستخدمين (User Bot) ---
 def get_user_menu():
     return [
         [Button.inline("⚡ السرعة", b"set_speed"), Button.inline("⚙️ تشغيل / إيقاف", b"toggle_settings")],
@@ -117,7 +114,7 @@ async def user_callbacks(event):
     sender_id = event.sender_id
     if data.startswith("req_act_"):
         user_id = int(data.split("_")[2])
-        pending_requests[user_id] = datetime.now() if 'datetime' in globals() else 0
+        pending_requests[user_id] = 0
         await control_client.send_message(ADMIN_ID, f"🔔 طلب تفعيل جديد من: `{user_id}`", buttons=[[Button.inline("✅ قبول", f"acc_{user_id}".encode()), Button.inline("❌ رفض", f"rej_{user_id}".encode())]])
         await event.answer("تم إرسال طلبك للمالك.", alert=True)
         return
@@ -143,14 +140,23 @@ async def admin_decision_callbacks(event):
         await user_client.send_message(user_id, "❌ تم رفض طلبك.")
         await event.edit("تم رفض المستخدم.")
 
-# --- التشغيل الصحيح للكل بدون تعارض ---
+# --- التشغيل الأساسي ---
 async def main():
-    keep_alive()  # تشغيل خادم الويب بالخلفية
-    print("Starting clients...")
+    # تشغيل خادم الفلاسك في الخلفية بشكل آمن
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    print("Flask server started in background thread.")
+
+    print("Starting Telegram clients...")
     await control_client.start(bot_token=CONTROL_BOT_TOKEN)
     await user_client.start(bot_token=USER_BOT_TOKEN)
-    print("Both bots are running!")
-    await asyncio.gather(control_client.run_until_disconnected(), user_client.run_until_disconnected())
+    print("Both bots are running successfully!")
+
+    await asyncio.gather(
+        control_client.run_until_disconnected(),
+        user_client.run_until_disconnected()
+    )
 
 if __name__ == '__main__':
     asyncio.run(main())
