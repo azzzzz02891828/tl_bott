@@ -31,12 +31,10 @@ class AdminStates(StatesGroup):
 
 class UserStates(StatesGroup):
     waiting_for_custom_name = State()
-    waiting_for_start_kw = State()
-    waiting_for_stop_kw = State()
 
 # --- إعداد قاعدة البيانات ---
 def init_db():
-    conn = sqlite3.connect('bot_system.db')
+    conn = sqlite3.connect('bot_system.db', timeout=10)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -155,12 +153,15 @@ async def process_activation(callback: types.CallbackQuery):
             InlineKeyboardButton(text="رفض ❌", callback_data=f"reject_{user_id}")
         ]
     ])
-    await admin_bot.send_message(
-        ADMIN_ID, 
-        f"📢 طلب تفعيل جديد:\n👤 المستخدم: @{username}\n🆔 الآيدي: `{user_id}`", 
-        reply_markup=admin_kb,
-        parse_mode="Markdown"
-    )
+    try:
+        await admin_bot.send_message(
+            ADMIN_ID, 
+            f"📢 طلب تفعيل جديد:\n👤 المستخدم: @{username}\n🆔 الآيدي: `{user_id}`", 
+            reply_markup=admin_kb,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Error sending admin notification: {e}")
 
 @dp_user.callback_query(F.data == "toggle_run")
 async def toggle_run_status(callback: types.CallbackQuery):
@@ -225,7 +226,6 @@ async def toggle_name_fn(callback: types.CallbackQuery, state: FSMContext):
     cursor.execute("SELECT custom_name FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     if row and row[0]:
-        # إزالة الاسم
         cursor.execute("UPDATE users SET custom_name = '' WHERE user_id = ?", (user_id,))
         conn.commit()
         cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
@@ -437,14 +437,14 @@ async def do_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"📢 تم إرسال الكلمة العامة لـ ({count}) مشترك بنجاح!")
 
-# --- تشغيل البوتين وسيرفر الحفاظ على الاستيقاظ ---
+# --- تشغيل البوتين في نفس الوقت ---
 keep_alive()
 
 async def main():
     print("🚀 جاري إقلاع البوتين وسيرفر الويب...")
     await asyncio.gather(
-        dp_user.start_polling(user_bot),
-        dp_admin.start_polling(admin_bot)
+        dp_user.start_polling(user_bot, drop_pending_updates=True),
+        dp_admin.start_polling(admin_bot, drop_pending_updates=True)
     )
 
 if __name__ == "__main__":
