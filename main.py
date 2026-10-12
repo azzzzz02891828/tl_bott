@@ -1,7 +1,7 @@
 import sqlite3
 import random
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,11 +10,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from keep_alive import keep_alive
 
-# ==================== 🔑 التوكنات والآيدي المدمجة ====================
+# ==================== 🔑 التوكنات المدمجة ====================
 USER_BOT_TOKEN = "8838773401:AAH8gaPm2-VjOhhE6WHO-yqhw1Su1AOlb_g"
 ADMIN_BOT_TOKEN = "8936206172:AAEV0LFdeUcwlfXkpIn5JyoTLsImNBnRtWI"
 ADMIN_ID = 5885382011
-# ====================================================================
+# ============================================================
 
 user_bot = Bot(token=USER_BOT_TOKEN)
 admin_bot = Bot(token=ADMIN_BOT_TOKEN)
@@ -22,7 +22,6 @@ admin_bot = Bot(token=ADMIN_BOT_TOKEN)
 dp_user = Dispatcher(storage=MemoryStorage())
 dp_admin = Dispatcher(storage=MemoryStorage())
 
-# حالات FSM لإدخال البيانات
 class AdminStates(StatesGroup):
     waiting_for_male_lines = State()
     waiting_for_female_lines = State()
@@ -32,7 +31,6 @@ class AdminStates(StatesGroup):
 class UserStates(StatesGroup):
     waiting_for_custom_name = State()
 
-# --- إعداد قاعدة البيانات ---
 def init_db():
     conn = sqlite3.connect('bot_system.db', timeout=10)
     cursor = conn.cursor()
@@ -40,9 +38,6 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
-            status TEXT DEFAULT 'pending',
-            expiry_date TEXT,
-            last_request_time TEXT,
             gender TEXT DEFAULT 'male',
             custom_name TEXT DEFAULT '',
             speed TEXT DEFAULT 'medium',
@@ -63,15 +58,12 @@ def init_db():
 
 init_db()
 
-# ==============================================================
-# 🤖 1. بوت المستخدم (USER BOT)
-# ==============================================================
-
 def get_user_markup(user_data):
-    is_running = user_data[10]
-    speed = user_data[7]
-    gender = user_data[5]
-    has_name = bool(user_data[6])
+    # user_data structure: (user_id, username, gender, custom_name, speed, start_keyword, stop_keyword, is_running)
+    is_running = user_data[7]
+    speed = user_data[4]
+    gender = user_data[2]
+    has_name = bool(user_data[3])
 
     status_btn = InlineKeyboardButton(text="إيقاف البوت 🔴" if is_running else "تشغيل البوت ✅", callback_data="toggle_run")
     speed_btn = InlineKeyboardButton(text=f"السرعة ⚡️ ({speed})", callback_data="change_speed")
@@ -97,71 +89,21 @@ def get_user_markup(user_data):
 @dp_user.message(Command("start"))
 async def user_start(message: types.Message):
     user_id = message.from_user.id
+    username = message.from_user.username or "بدون_يوزر"
+    
     conn = sqlite3.connect('bot_system.db')
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
-    conn.close()
-
-    if row and row[2] == 'active':
-        await message.answer("أهلاً بك! لوحة التحكم الخاصة بك:", reply_markup=get_user_markup(row))
-    else:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="تفعيل ✅", callback_data="request_activation")]
-        ])
-        await message.answer("مرحباً بك! اضغط على زر (تفعيل ✅) لطلب التفعيل من المالك:", reply_markup=keyboard)
-
-@dp_user.callback_query(F.data == "request_activation")
-async def process_activation(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    username = callback.from_user.username or "بدون_يوزر"
-    now = datetime.now()
     
-    conn = sqlite3.connect('bot_system.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT last_request_time, status FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    
-    if row and row[1] == 'active':
-        await callback.answer("البوت مفعل لديك بالفعل! ✅", show_alert=True)
-        conn.close()
-        return
+    if not row:
+        cursor.execute("INSERT INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
+        conn.commit()
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
         
-    if row and row[0]:
-        last_req = datetime.fromisoformat(row[0])
-        diff = (now - last_req).total_seconds()
-        if diff < 300: # 5 دقائق كولداون إجباري
-            remaining = int(300 - diff)
-            mins, secs = divmod(remaining, 60)
-            await callback.answer(f"⏳ يجب عليك الانتظار {mins} دقيقة و {secs} ثانية لإعادة إرسال الطلب.", show_alert=True)
-            conn.close()
-            return
-
-    cursor.execute('''
-        INSERT INTO users (user_id, username, status, last_request_time) 
-        VALUES (?, ?, 'pending', ?)
-        ON CONFLICT(user_id) DO UPDATE SET status='pending', last_request_time=?
-    ''', (user_id, username, now.isoformat(), now.isoformat()))
-    conn.commit()
     conn.close()
-    
-    await callback.message.edit_text("⏳ تم إرسال طلبك للمالك بنجاح. يرجى الانتظار حتى يتم القبول.")
-    
-    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="قبول ✅", callback_data=f"accept_{user_id}"),
-            InlineKeyboardButton(text="رفض ❌", callback_data=f"reject_{user_id}")
-        ]
-    ])
-    try:
-        await admin_bot.send_message(
-            ADMIN_ID, 
-            f"📢 طلب تفعيل جديد:\n👤 المستخدم: @{username}\n🆔 الآيدي: `{user_id}`", 
-            reply_markup=admin_kb,
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        print(f"Error sending admin notification: {e}")
+    await message.answer("أهلاً بك! لوحة التحكم الخاصة بك تعمل بكامل المميزات:", reply_markup=get_user_markup(row))
 
 @dp_user.callback_query(F.data == "toggle_run")
 async def toggle_run_status(callback: types.CallbackQuery):
@@ -235,7 +177,7 @@ async def toggle_name_fn(callback: types.CallbackQuery, state: FSMContext):
     else:
         conn.close()
         await state.set_state(UserStates.waiting_for_custom_name)
-        await callback.message.answer("✏️ أرسل الاسم الذي تريد إضافته للسطور:")
+        await callback.message.answer("✏️ أرسل الاسم الذي تريد إضافته:")
 
 @dp_user.message(UserStates.waiting_for_custom_name)
 async def save_custom_name(message: types.Message, state: FSMContext):
@@ -248,10 +190,33 @@ async def save_custom_name(message: types.Message, state: FSMContext):
     row = cursor.fetchone()
     conn.close()
     await state.clear()
-    await message.answer("✅ تم حفظ الاسم بنجاح وإضافته للقائمة!", reply_markup=get_user_markup(row))
+    await message.answer("✅ تم حفظ الاسم بنجاح!", reply_markup=get_user_markup(row))
+
+@dp_user.callback_query(F.data == "user_individuals")
+async def show_user_individuals(callback: types.CallbackQuery):
+    conn = sqlite3.connect('bot_system.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT content FROM admin_content WHERE category = 'individuals'")
+    res = cursor.fetchone()
+    conn.close()
+    content = res[0] if res else "لا توجد فرديات مضافة حالياً."
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="عودة ↩️", callback_data="back_home")]
+    ])
+    await callback.message.edit_text(f"📖 الفرديات:\n\n{content}", reply_markup=kb)
+
+@dp_user.callback_query(F.data == "back_home")
+async def back_home_fn(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    conn = sqlite3.connect('bot_system.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    await callback.message.edit_text("لوحة التحكم الخاصة بك:", reply_markup=get_user_markup(row))
 
 # ==============================================================
-# 👑 2. بوت التحكم (ADMIN CONTROL BOT)
+# 👑 بوت التحكم (للإدارة وتعبئة المحتوى فقط)
 # ==============================================================
 
 @dp_admin.message(Command("start"))
@@ -261,55 +226,9 @@ async def admin_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 السطور", callback_data="admin_lines"),
          InlineKeyboardButton(text="📖 الفرديات", callback_data="admin_individuals")],
-        [InlineKeyboardButton(text="👥 المشتركين", callback_data="admin_subscribers"),
-         InlineKeyboardButton(text="📢 كلمة عامة", callback_data="admin_broadcast")]
+        [InlineKeyboardButton(text="📢 كلمة عامة", callback_data="admin_broadcast")]
     ])
     await message.answer("أهلاً بك في لوحة تحكم المالك 👑:", reply_markup=keyboard)
-
-@dp_admin.callback_query(F.data.startswith("reject_"))
-async def admin_reject(callback: types.CallbackQuery):
-    user_id = int(callback.data.split("_")[1])
-    conn = sqlite3.connect('bot_system.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET status = 'rejected', last_request_time = ? WHERE user_id = ?", (datetime.now().isoformat(), user_id))
-    conn.commit()
-    conn.close()
-    await callback.message.edit_text("❌ تم رفض المستخدم (يبدأ عداد الـ 5 دقائق لديه).")
-    try:
-        await user_bot.send_message(user_id, "❌ تم رفض طلبك. يمكنك إعادة الإرسال بعد مرور 5 دقائق.")
-    except:
-        pass
-
-@dp_admin.callback_query(F.data.startswith("accept_"))
-async def admin_accept(callback: types.CallbackQuery):
-    user_id = int(callback.data.split("_")[1])
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="يوم واحد 📅", callback_data=f"dur_1_{user_id}"),
-         InlineKeyboardButton(text="أسبوع 📆", callback_data=f"dur_7_{user_id}")],
-        [InlineKeyboardButton(text="شهر 🗓️", callback_data=f"dur_30_{user_id}"),
-         InlineKeyboardButton(text="للابد ♾️", callback_data=f"dur_forever_{user_id}")]
-    ])
-    await callback.message.edit_text("اختر مدة الاشتراك للمستخدم:", reply_markup=kb)
-
-@dp_admin.callback_query(F.data.startswith("dur_"))
-async def set_duration(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    dur_type = parts[1]
-    user_id = int(parts[2])
-    
-    expiry = "forever" if dur_type == "forever" else (datetime.now() + timedelta(days=int(dur_type))).isoformat()
-
-    conn = sqlite3.connect('bot_system.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET status = 'active', expiry_date = ? WHERE user_id = ?", (expiry, user_id))
-    conn.commit()
-    conn.close()
-    
-    await callback.message.edit_text("✅ تم قبول وتفعيل المستخدم بنجاح!")
-    try:
-        await user_bot.send_message(user_id, "🎉 تم قبول طلبك وتفعيل البوت لديك بنجاح!")
-    except:
-        pass
 
 @dp_admin.callback_query(F.data == "admin_lines")
 async def admin_lines_menu(callback: types.CallbackQuery):
@@ -325,15 +244,14 @@ async def admin_home(callback: types.CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 السطور", callback_data="admin_lines"),
          InlineKeyboardButton(text="📖 الفرديات", callback_data="admin_individuals")],
-        [InlineKeyboardButton(text="👥 المشتركين", callback_data="admin_subscribers"),
-         InlineKeyboardButton(text="📢 كلمة عامة", callback_data="admin_broadcast")]
+        [InlineKeyboardButton(text="📢 كلمة عامة", callback_data="admin_broadcast")]
     ])
     await callback.message.edit_text("لوحة تحكم المالك 👑:", reply_markup=keyboard)
 
 @dp_admin.callback_query(F.data == "set_male_lines")
 async def prompt_male(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_male_lines)
-    await callback.message.answer("أرسل كلمات (ذكر) مفصولة بفواصل (مثال: هاي, السلام, عليكم):")
+    await callback.message.answer("أرسل كلمات (ذكر):")
 
 @dp_admin.message(AdminStates.waiting_for_male_lines)
 async def save_male_lines(message: types.Message, state: FSMContext):
@@ -344,12 +262,12 @@ async def save_male_lines(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     await state.clear()
-    await message.answer("✅ تم حفظ سطور الذكر بنجاح!")
+    await message.answer("✅ تم الحفظ بنجاح!")
 
 @dp_admin.callback_query(F.data == "set_female_lines")
 async def prompt_female(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_female_lines)
-    await callback.message.answer("أرسل كلمات (أنثى) مفصولة بفواصل:")
+    await callback.message.answer("أرسل كلمات (أنثى):")
 
 @dp_admin.message(AdminStates.waiting_for_female_lines)
 async def save_female_lines(message: types.Message, state: FSMContext):
@@ -360,7 +278,7 @@ async def save_female_lines(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     await state.clear()
-    await message.answer("✅ تم حفظ سطور الأنثى بنجاح!")
+    await message.answer("✅ تم الحفظ بنجاح!")
 
 @dp_admin.callback_query(F.data == "admin_individuals")
 async def prompt_individuals(callback: types.CallbackQuery, state: FSMContext):
@@ -376,53 +294,19 @@ async def save_individuals(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     await state.clear()
-    await message.answer("✅ تم حفظ الفرديات بنجاح!")
-
-@dp_admin.callback_query(F.data == "admin_subscribers")
-async def show_subscribers(callback: types.CallbackQuery):
-    conn = sqlite3.connect('bot_system.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, username, last_request_time FROM users WHERE status = 'active'")
-    users = cursor.fetchall()
-    conn.close()
-
-    if not users:
-        await callback.message.answer("لا توجد اشتراكات نشطة حالياً.")
-        return
-
-    for u in users:
-        uid, uname, last_time = u
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="طرد 🚫", callback_data=f"kick_{uid}")]
-        ])
-        msg = f"👤 المستخدم: @{uname}\n🆔 الآيدي: `{uid}`\n📅 آخر طلب: {last_time[:16]}"
-        await callback.message.answer(msg, reply_markup=kb, parse_mode="Markdown")
-
-@dp_admin.callback_query(F.data.startswith("kick_"))
-async def kick_user(callback: types.CallbackQuery):
-    uid = int(callback.data.split("_")[1])
-    conn = sqlite3.connect('bot_system.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET status = 'banned', is_running = 0 WHERE user_id = ?", (uid,))
-    conn.commit()
-    conn.close()
-    await callback.message.edit_text("🚫 تم طرد المستخدم نهائياً.")
-    try:
-        await user_bot.send_message(uid, "🚫 تم طردك وإيقاف البوت من قبل المالك.")
-    except:
-        pass
+    await message.answer("✅ تم الحفظ بنجاح!")
 
 @dp_admin.callback_query(F.data == "admin_broadcast")
 async def broadcast_prompt(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_broadcast)
-    await callback.message.answer("أرسل الكلمة العامة لنشرها لجميع المشتركين النشطين:")
+    await callback.message.answer("أرسل الكلمة العامة لنشرها لجميع المستخدمين:")
 
 @dp_admin.message(AdminStates.waiting_for_broadcast)
 async def do_broadcast(message: types.Message, state: FSMContext):
     text = message.text
     conn = sqlite3.connect('bot_system.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users WHERE status = 'active'")
+    cursor.execute("SELECT user_id FROM users")
     users = cursor.fetchall()
     conn.close()
 
@@ -435,9 +319,8 @@ async def do_broadcast(message: types.Message, state: FSMContext):
             pass
 
     await state.clear()
-    await message.answer(f"📢 تم إرسال الكلمة العامة لـ ({count}) مشترك بنجاح!")
+    await message.answer(f"📢 تم الإرسال لـ ({count}) مستخدم بنجاح!")
 
-# --- تشغيل البوتين في نفس الوقت ---
 keep_alive()
 
 async def main():
