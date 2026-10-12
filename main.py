@@ -2,17 +2,12 @@ import sqlite3
 import random
 import asyncio
 from datetime import datetime, timedelta
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keep_alive import keep_alive
 
 # ==================== 🔑 التوكنات والبيانات ====================
 USER_BOT_TOKEN = "8838773401:AAH8gaPm2-VjOhhE6WHO-yqhw1Su1AOlb_g"
 ADMIN_BOT_TOKEN = "8936206172:AAEV0LFdeUcwlfXkpIn5JyoTLsImNBnRtWI"
 ADMIN_ID = 5885382011
-
-# ملاحظة: لعمل UserBot حقيقي يدخل بالحساب، يفضل وضع API_ID و API_HASH (يمكن جلبها من my.telegram.org)
-# سنقوم بتشغيل بوت إداري تفاعلي وبوت مستخدم يراقب الكلمات المفتاحية.
 # ============================================================
 
 from aiogram import Bot, Dispatcher, types, F
@@ -95,7 +90,7 @@ def get_user_markup(user_data):
         [individual_btn]
     ])
 
-# ==================== واجهة بوت المستخدم (Aiogram) ====================
+# ==================== بوت المستخدم ====================
 @dp_user.message(Command("start"))
 async def user_start(message: types.Message):
     user_id = message.from_user.id
@@ -144,7 +139,7 @@ async def process_activation(callback: types.CallbackQuery):
     if row and row[0]:
         last_req = datetime.fromisoformat(row[0])
         diff = (now - last_req).total_seconds()
-        if diff < 300: # 5 دقائق كولداون إجباري
+        if diff < 300:
             remaining = int(300 - diff)
             mins, secs = divmod(remaining, 60)
             await callback.answer(f"⏳ يجب الانتظار {mins} دقيقة و {secs} ثانية لإعادة إرسال الطلب.", show_alert=True)
@@ -509,8 +504,7 @@ async def do_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"📢 تم إرسال الكلمة العامة لـ ({count}) مشترك بنجاح!")
 
-
-# --- تشغيل Flask وسيرفر الويب وبوتات الإدارة والتشغيل التلقائي ---
+# --- تشغيل صحيح 100% بدون مشاكل Event Loop ---
 keep_alive()
 
 async def main():
