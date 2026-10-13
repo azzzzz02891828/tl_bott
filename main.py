@@ -2,6 +2,12 @@ import sqlite3
 import random
 import asyncio
 from datetime import datetime, timedelta
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from keep_alive import keep_alive
 
 # ==================== 🔑 التوكنات والبيانات ====================
@@ -10,14 +16,8 @@ ADMIN_BOT_TOKEN = "8936206172:AAEV0LFdeUcwlfXkpIn5JyoTLsImNBnRtWI"
 ADMIN_ID = 5885382011
 # ============================================================
 
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-
-user_bot_api = Bot(token=USER_BOT_TOKEN)
-admin_bot_api = Bot(token=ADMIN_BOT_TOKEN)
+user_bot = Bot(token=USER_BOT_TOKEN)
+admin_bot = Bot(token=ADMIN_BOT_TOKEN)
 
 dp_user = Dispatcher(storage=MemoryStorage())
 dp_admin = Dispatcher(storage=MemoryStorage())
@@ -33,6 +33,7 @@ class UserStates(StatesGroup):
     waiting_for_start_kw = State()
     waiting_for_stop_kw = State()
 
+# --- قاعدة البيانات ---
 def init_db():
     conn = sqlite3.connect('bot_system.db', timeout=10)
     cursor = conn.cursor()
@@ -64,6 +65,7 @@ def init_db():
 init_db()
 
 def get_user_markup(user_data):
+    # (user_id, username, status, expiry_date, last_request_time, gender, custom_name, speed, start_kw, stop_kw, is_running)
     is_running = user_data[10]
     speed = user_data[7]
     gender = user_data[5]
@@ -137,14 +139,17 @@ async def process_activation(callback: types.CallbackQuery):
         return
         
     if row and row[0]:
-        last_req = datetime.fromisoformat(row[0])
-        diff = (now - last_req).total_seconds()
-        if diff < 300:
-            remaining = int(300 - diff)
-            mins, secs = divmod(remaining, 60)
-            await callback.answer(f"⏳ يجب الانتظار {mins} دقيقة و {secs} ثانية لإعادة إرسال الطلب.", show_alert=True)
-            conn.close()
-            return
+        try:
+            last_req = datetime.fromisoformat(row[0])
+            diff = (now - last_req).total_seconds()
+            if diff < 300: # 5 دقائق كولداون إجباري
+                remaining = int(300 - diff)
+                mins, secs = divmod(remaining, 60)
+                await callback.answer(f"⏳ يجب الانتظار {mins} دقيقة و {secs} ثانية لإعادة إرسال الطلب.", show_alert=True)
+                conn.close()
+                return
+        except:
+            pass
 
     cursor.execute('''
         INSERT INTO users (user_id, username, status, last_request_time) 
@@ -163,7 +168,7 @@ async def process_activation(callback: types.CallbackQuery):
         ]
     ])
     try:
-        await admin_bot_api.send_message(
+        await admin_bot.send_message(
             ADMIN_ID, 
             f"📢 طلب تفعيل جديد:\n👤 المستخدم: @{username}\n🆔 الآيدي: `{user_id}`", 
             reply_markup=admin_kb,
@@ -343,7 +348,7 @@ async def admin_reject(callback: types.CallbackQuery):
     conn.close()
     await callback.message.edit_text("❌ تم رفض المستخدم.")
     try:
-        await user_bot_api.send_message(user_id, "❌ تم رفض طلبك. يمكنك إعادة الإرسال بعد 5 دقائق.")
+        await user_bot.send_message(user_id, "❌ تم رفض طلبك. يمكنك إعادة الإرسال بعد 5 دقائق.")
     except:
         pass
 
@@ -374,7 +379,7 @@ async def set_duration(callback: types.CallbackQuery):
     
     await callback.message.edit_text("✅ تم قبول وتفعيل المستخدم بنجاح!")
     try:
-        await user_bot_api.send_message(user_id, "🎉 تم قبول طلبك وتفعيل البوت لديك بنجاح!")
+        await user_bot.send_message(user_id, "🎉 تم قبول طلبك وتفعيل البوت لديك بنجاح!")
     except:
         pass
 
@@ -475,7 +480,7 @@ async def kick_user(callback: types.CallbackQuery):
     conn.close()
     await callback.message.edit_text("🚫 تم طرد المستخدم نهائياً وإيقافه.")
     try:
-        await user_bot_api.send_message(uid, "🚫 تم طردك وإيقاف البوت من قبل المالك.")
+        await user_bot.send_message(uid, "🚫 تم طردك وإيقاف البوت من قبل المالك.")
     except:
         pass
 
@@ -496,7 +501,7 @@ async def do_broadcast(message: types.Message, state: FSMContext):
     count = 0
     for u in users:
         try:
-            await user_bot_api.send_message(u[0], text)
+            await user_bot.send_message(u[0], text)
             count += 1
         except:
             pass
@@ -504,14 +509,16 @@ async def do_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"📢 تم إرسال الكلمة العامة لـ ({count}) مشترك بنجاح!")
 
-# --- تشغيل صحيح 100% بدون مشاكل Event Loop ---
+# --- تشغيل Flask وسيرفر الويب وبوتات الإدارة والتشغيل التلقائي ---
 keep_alive()
 
 async def main():
-    print("🚀 جاري إقلاع البوتين وسيرفر الويب...")
+    print("🚀 مسح التحديثات المعلقة وإقلاع البوتين...")
+    await user_bot.delete_webhook(drop_pending_updates=True)
+    await admin_bot.delete_webhook(drop_pending_updates=True)
     await asyncio.gather(
-        dp_user.start_polling(user_bot_api, drop_pending_updates=True),
-        dp_admin.start_polling(admin_bot_api, drop_pending_updates=True)
+        dp_user.start_polling(user_bot),
+        dp_admin.start_polling(admin_bot)
     )
 
 if __name__ == "__main__":
