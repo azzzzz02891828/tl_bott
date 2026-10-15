@@ -7,9 +7,9 @@ from flask import Flask
 import telebot
 from telebot import types
 
-# === التوكنات والمعرفات الخاصة بك ===
-USER_BOT_TOKEN = "8914093126:AAGVRdz3iLUZYRkcCxpJbnJKmt1wJG1gK0U"
-ADMIN_BOT_TOKEN = "8940214039:AAHpQIbVxFVzs3x5IWupvgKJ7Nb0yzFQI-w"
+# === التوكنات والمعرفات الجديدة المحدثة ===
+USER_BOT_TOKEN = "8986740223:AAHeUWSIsw2VfhE--WUAAs8zui21LBm296o"
+ADMIN_BOT_TOKEN = "8888644906:AAF-qNH50PiACqPJpp0tqIy9CLQFOVHHTkE"
 ADMIN_ID = 5885382011
 
 admin_bot = telebot.TeleBot(ADMIN_BOT_TOKEN)
@@ -162,9 +162,6 @@ def show_user_panel(chat_id, user_id):
     if not row: return
     status, req_time, exp_time, gender, custom_name, start_kw, stop_kw, s_start, s_stop, s_speed = row
     
-    btn_gender_m = "ذكر ✅" if gender == "ذكر" else "ذكر 🧍‍♂️"
-    btn_gender_f = "أنثى ✅" if gender == "أنثى" else "أنثى 🧍‍♀️"
-    
     btn_name_text = "ازالة اسم الشخص ❌" if custom_name else "الاسم ✏️"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -237,7 +234,7 @@ def user_panel_callbacks(call):
         
     elif data == "u_toggle_name":
         row = get_user_data(user_id)
-        if row and row[4]: # إذا كان فيه اسم يزيله
+        if row and row[4]: 
             cursor.execute("UPDATE users SET custom_name = '' WHERE user_id = ?", (user_id,))
             conn.commit()
             user_bot.answer_callback_query(call.id, "تم إزالة الاسم!")
@@ -247,7 +244,7 @@ def user_panel_callbacks(call):
             user_bot.register_next_step_handler(msg, u_save_name)
             
     elif data == "u_set_start_kw":
-        msg = user_bot.send_message(call.message.chat.id, "أرسل كلمة التشغيل المفتاحية التي عند كتابتها في أي شات يبدأ البوت:")
+        msg = user_bot.send_message(call.message.chat.id, "أرسل كلمة التشغيل المفتاحية:")
         user_bot.register_next_step_handler(msg, lambda m: u_save_kw(m, "start_kw"))
         
     elif data == "u_set_stop_kw":
@@ -351,7 +348,6 @@ def admin_callbacks(call):
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     cursor = conn.cursor()
     
-    # معالجة قبول / رفض الطلبات
     if data.startswith("acc_") or data.startswith("rej_"):
         parts = data.split("_")
         action = parts[0]
@@ -422,7 +418,7 @@ def admin_callbacks(call):
         
     elif data.startswith("adm_words_"):
         gender = data.split("_")[2]
-        msg = admin_bot.send_message(call.message.chat.id, f"أرسل الكلمات الخاصة بـ ({gender}) بنفس الطريقة والتنسيق (مثال: هاي,السلام, عليكم):")
+        msg = admin_bot.send_message(call.message.chat.id, f"أرسل الكلمات الخاصة بـ ({gender}) بنفس التنسيق (مثال: هاي,السلام, عليكم):")
         admin_bot.register_next_step_handler(msg, adm_save_words, gender)
         
     elif data == "adm_sing_menu":
