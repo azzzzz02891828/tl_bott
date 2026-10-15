@@ -7,31 +7,40 @@ from flask import Flask
 import telebot
 from telebot import types
 
-# === إعدادات البوتات المضافة مباشرة ===
-ADMIN_BOT_TOKEN = "8936206172:AAEV0LFdeUcwlfXkpIn5JyoTLsImNBnRtWI"
-USER_BOT_TOKEN = "8838773401:AAH8gaPm2-VjOhhE6WHO-yqhw1Su1AOlb_g"
+# === التوكنات والمعرفات الخاصة بك ===
+USER_BOT_TOKEN = "8914093126:AAGVRdz3iLUZYRkcCxpJbnJKmt1wJG1gK0U"
+ADMIN_BOT_TOKEN = "8940214039:AAHpQIbVxFVzs3x5IWupvgKJ7Nb0yzFQI-w"
 ADMIN_ID = 5885382011
 
 admin_bot = telebot.TeleBot(ADMIN_BOT_TOKEN)
 user_bot = telebot.TeleBot(USER_BOT_TOKEN)
 
-# === إعداد قاعدة البيانات SQLite ===
+# === إنشاء وإعداد قاعدة البيانات SQLite ===
 def init_db():
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     cursor = conn.cursor()
     
+    # جدول المشتركين
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
+            phone TEXT DEFAULT 'غير محدد',
             status TEXT DEFAULT 'none',
             request_time REAL DEFAULT 0,
             expiry_time REAL DEFAULT 0,
+            last_active REAL DEFAULT 0,
             gender TEXT DEFAULT 'ذكر',
-            custom_name TEXT DEFAULT ''
+            custom_name TEXT DEFAULT '',
+            start_kw TEXT DEFAULT '',
+            stop_kw TEXT DEFAULT '',
+            sing_start_kw TEXT DEFAULT '',
+            sing_stop_kw TEXT DEFAULT '',
+            sing_speed TEXT DEFAULT 'متوسط'
         )
     """)
     
+    # جدول الإعدادات العامة
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -39,6 +48,7 @@ def init_db():
         )
     """)
     
+    # جدول السطور والكلمات (حسب الجنس)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS words (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,6 +57,7 @@ def init_db():
         )
     """)
     
+    # جدول الفرديات
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS singulars (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,57 +85,69 @@ def set_setting(key, value):
     conn.commit()
     conn.close()
 
-# إعداد القيم الافتراضية إذا لم تكن موجودة
+# الإعدادات الافتراضية
 if not get_setting("bot_active"): set_setting("bot_active", "1")
 if not get_setting("speed"): set_setting("speed", "متوسط")
-if not get_setting("start_keyword"): set_setting("start_keyword", "السلام")
-if not get_setting("stop_keyword"): set_setting("stop_keyword", "إيقاف")
 
 
-# ==================== بوت المستخدم (User Bot) ====================
+# ==============================================================================
+#                               بوت المستخدم (User Bot)
+# ==============================================================================
+
+def get_user_data(user_id):
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT status, request_time, expiry_time, gender, custom_name, start_kw, stop_kw, sing_start_kw, sing_stop_kw, sing_speed FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
 
 @user_bot.message_handler(commands=['start'])
 def user_start(message):
     user_id = message.from_user.id
     username = message.from_user.username or message.from_user.first_name
     
-    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("SELECT status, request_time, expiry_time FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    
+    row = get_user_data(user_id)
     current_time = time.time()
     
     if row:
-        status, req_time, exp_time = row
+        status, req_time, exp_time, gender, custom_name, start_kw, stop_kw, s_start, s_stop, s_speed = row
+        
         if status == 'active':
+            # التحقق من صلاحية الاشتراك
             if exp_time > 0 and current_time > exp_time:
+                conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+                cursor = conn.cursor()
                 cursor.execute("UPDATE users SET status = 'expired' WHERE user_id = ?", (user_id,))
                 conn.commit()
-                user_bot.reply_to(message, "انتهت فترة اشتراكك في البوت.")
                 conn.close()
+                user_bot.reply_to(message, "⚠️ انتهت فترة اشتراكك في البوت. يرجى التواصل مع المالك للتجديد.")
                 return
-            user_bot.reply_to(message, "أهلاً بك! بوتك مفعل ويعمل بنجاح ✅")
-            conn.close()
+            
+            # إذا كان مقبولاً ونشطاً تُعرض له قائمة الإعدادات والأزرار الخاصة به
+            show_user_panel(message.chat.id, user_id)
             return
+            
         elif status == 'pending':
-            user_bot.reply_to(message, "لقد قمت مسبقاً بإرسال طلب تفعيل، يرجى الانتظار حتى يراجع المالك طلبك ⏳")
-            conn.close()
+            user_bot.reply_to(message, "⏳ تم إرسال طلبك للمالك مسبقاً، يرجى الانتظار لحين الموافقة.")
             return
+            
         elif status == 'rejected':
-            if current_time - req_time < 300: # 5 دقائق (300 ثانية)
-                remaining = int(300 - (current_time - req_time))
+            # شرط الانتظار 5 دقائق كاملة عند الرفض
+            elapsed = current_time - req_time
+            if elapsed < 300:
+                remaining = int(300 - elapsed)
                 mins = remaining // 60
                 secs = remaining % 60
-                user_bot.reply_to(message, f"تم رفض طلبك سابقاً. يمكنك إعادة المحاولة بعد {mins} دقيقة و {secs} ثانية.")
-                conn.close()
+                user_bot.reply_to(message, f"❌ تم رفض طلبك سابقاً. يجب الانتظار لمدة 5 دقائق كاملة لإعادة إرسال الطلب.\nالمتبقي: {mins} دقيقة و {secs} ثانية.")
                 return
 
-    # إنشاء زر التفعيل
+    # إنشاء زر التفعيل التفاعلي للطلب
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("تفعيل ✅", callback_data=f"request_activate_{user_id}"))
+    markup.add(types.InlineKeyboardButton("تفعيل ✅", callback_data=f"request_act_{user_id}"))
     
-    # تحديث البيانات كطلب جديد
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    cursor = conn.cursor()
     cursor.execute("""
         INSERT OR REPLACE INTO users (user_id, username, status, request_time) 
         VALUES (?, ?, 'pending', ?)
@@ -132,37 +155,172 @@ def user_start(message):
     conn.commit()
     conn.close()
     
-    user_bot.reply_to(message, "أهلاً بك في بوت الخدمة. اضغط على الزر أدناه لإرسال طلب تفعيل للمالك:", reply_markup=markup)
+    user_bot.reply_to(message, "مرحباً بك! اضغط على زر (تفعيل ✅) لإرسال طلب الاشتراك إلى المالك:", reply_markup=markup)
 
-@user_bot.callback_query_handler(func=lambda call: call.data.startswith("request_activate_"))
-def handle_activation_request(call):
+def show_user_panel(chat_id, user_id):
+    row = get_user_data(user_id)
+    if not row: return
+    status, req_time, exp_time, gender, custom_name, start_kw, stop_kw, s_start, s_stop, s_speed = row
+    
+    btn_gender_m = "ذكر ✅" if gender == "ذكر" else "ذكر 🧍‍♂️"
+    btn_gender_f = "أنثى ✅" if gender == "أنثى" else "أنثى 🧍‍♀️"
+    
+    btn_name_text = "ازالة اسم الشخص ❌" if custom_name else "الاسم ✏️"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("كلمة التشغيل ▶️", callback_data="u_set_start_kw"),
+        types.InlineKeyboardButton("كلمة الإيقاف ⏹️", callback_data="u_set_stop_kw"),
+        types.InlineKeyboardButton(btn_name_text, callback_data="u_toggle_name"),
+        types.InlineKeyboardButton("الجنس 👥", callback_data="u_select_gender"),
+        types.InlineKeyboardButton("فرديات 📖", callback_data="u_singulars_menu")
+    )
+    
+    info_msg = (
+        f"⚙️ **لوحة التحكم الخاصة بك:**\n\n"
+        f"🔹 الجنس المختار: **{gender}**\n"
+        f"🔹 الاسم المضاف: **{custom_name if custom_name else 'لا يوجد'}**\n"
+        f"🔹 كلمة التشغيل: **{start_kw if start_kw else 'غير محددة'}**\n"
+        f"🔹 كلمة الإيقاف: **{stop_kw if stop_kw else 'غير محددة'}**"
+    )
+    user_bot.send_message(chat_id, info_msg, reply_markup=markup, parse_mode="Markdown")
+
+@user_bot.callback_query_handler(func=lambda call: call.data.startswith("request_act_"))
+def user_request_act(call):
     user_id = call.from_user.id
     username = call.from_user.username or call.from_user.first_name
     
     # إرسال إشعار لبوت التحكم عند المالك
     markup = types.InlineKeyboardMarkup()
     markup.row(
-        types.InlineKeyboardButton("قبول 1 يوم 📅", callback_data=f"accept_1d_{user_id}"),
-        types.InlineKeyboardButton("قبول أسبوع 📆", callback_data=f"accept_1w_{user_id}")
+        types.InlineKeyboardButton("قبول 1 يوم 📅", callback_data=f"acc_1d_{user_id}"),
+        types.InlineKeyboardButton("قبول أسبوع 📆", callback_data=f"acc_1w_{user_id}")
     )
     markup.row(
-        types.InlineKeyboardButton("قبول شهر 🗓️", callback_data=f"accept_1m_{user_id}"),
-        types.InlineKeyboardButton("قبول للابد ♾️", callback_data=f"accept_forever_{user_id}")
+        types.InlineKeyboardButton("قبول شهر 🗓️", callback_data=f"acc_1m_{user_id}"),
+        types.InlineKeyboardButton("قبول للابد ♾️", callback_data=f"acc_forever_{user_id}")
     )
-    markup.add(types.InlineKeyboardButton("رفض ❌", callback_data=f"reject_{user_id}"))
+    markup.add(types.InlineKeyboardButton("رفض ❌", callback_data=f"rej_{user_id}"))
     
     admin_bot.send_message(
         ADMIN_ID,
-        f"📢 طلب تفعيل جديد!\n\n👤 المستخدم: @{username}\n🆔 الآي دي: `{user_id}`",
+        f"📩 **طلب تفعيل جديد!**\n\n👤 المستخدم: @{username}\n🆔 الآي دي: `{user_id}`",
         reply_markup=markup,
         parse_mode="Markdown"
     )
     
-    user_bot.answer_callback_query(call.id, "تم إرسال طلبك للمالك بنجاح، يرجى الانتظار...")
-    user_bot.edit_message_text("تم إرسال طلبك للمالك بنجاح، يرجى الانتظار حتى يتم القبول ⏳", call.message.chat.id, call.message.message_id)
+    user_bot.answer_callback_query(call.id, "تم إرسال الطلب للمالك!")
+    user_bot.edit_message_text("تم إرسال طلبك للمالك بنجاح، يرجى الانتظار لحين الموافقة ⏳", call.message.chat.id, call.message.message_id)
+
+@user_bot.callback_query_handler(func=lambda call: call.data.startswith("u_"))
+def user_panel_callbacks(call):
+    user_id = call.from_user.id
+    data = call.data
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    cursor = conn.cursor()
+    
+    if data == "u_select_gender":
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("ذكر 🧍‍♂️", callback_data="u_set_g_ذكر"),
+            types.InlineKeyboardButton("أنثى 🧍‍♀️", callback_data="u_set_g_أنثى"),
+            types.InlineKeyboardButton("عودة 🔙", callback_data="u_back_home")
+        )
+        user_bot.edit_message_text("اختر الجنس المطلوب للكلمات والسطور:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        
+    elif data.startswith("u_set_g_"):
+        g = data.split("_")[3]
+        cursor.execute("UPDATE users SET gender = ? WHERE user_id = ?", (g, user_id))
+        conn.commit()
+        user_bot.answer_callback_query(call.id, f"تم اختيار: {g}")
+        show_user_panel(call.message.chat.id, user_id)
+        
+    elif data == "u_toggle_name":
+        row = get_user_data(user_id)
+        if row and row[4]: # إذا كان فيه اسم يزيله
+            cursor.execute("UPDATE users SET custom_name = '' WHERE user_id = ?", (user_id,))
+            conn.commit()
+            user_bot.answer_callback_query(call.id, "تم إزالة الاسم!")
+            show_user_panel(call.message.chat.id, user_id)
+        else:
+            msg = user_bot.send_message(call.message.chat.id, "أرسل الاسم الذي تريد إضافته مع السطور:")
+            user_bot.register_next_step_handler(msg, u_save_name)
+            
+    elif data == "u_set_start_kw":
+        msg = user_bot.send_message(call.message.chat.id, "أرسل كلمة التشغيل المفتاحية التي عند كتابتها في أي شات يبدأ البوت:")
+        user_bot.register_next_step_handler(msg, lambda m: u_save_kw(m, "start_kw"))
+        
+    elif data == "u_set_stop_kw":
+        msg = user_bot.send_message(call.message.chat.id, "أرسل كلمة الإيقاف المفتاحية:")
+        user_bot.register_next_step_handler(msg, lambda m: u_save_kw(m, "stop_kw"))
+        
+    elif data == "u_singulars_menu":
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("كلمة تشغيل الفرديات ▶️", callback_data="u_sing_start"),
+            types.InlineKeyboardButton("كلمة إيقاف الفرديات ⏹️", callback_data="u_sing_stop"),
+            types.InlineKeyboardButton("سرعة الفرديات ⚡️", callback_data="u_sing_speed"),
+            types.InlineKeyboardButton("عودة 🔙", callback_data="u_back_home")
+        )
+        user_bot.edit_message_text("⚙️ **إعدادات الفرديات الخاصة بك:**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        
+    elif data == "u_sing_start":
+        msg = user_bot.send_message(call.message.chat.id, "أرسل كلمة التشغيل المفتاحية الخاصة بالفرديات:")
+        user_bot.register_next_step_handler(msg, lambda m: u_save_kw(m, "sing_start_kw"))
+        
+    elif data == "u_sing_stop":
+        msg = user_bot.send_message(call.message.chat.id, "أرسل كلمة الإيقاف المفتاحية الخاصة بالفرديات:")
+        user_bot.register_next_step_handler(msg, lambda m: u_save_kw(m, "sing_stop_kw"))
+        
+    elif data == "u_sing_speed":
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("بطيء 🐢 (10 ثواني)", callback_data="u_s_sp_slow"),
+            types.InlineKeyboardButton("متوسط 🏃 (5 ثواني)", callback_data="u_s_sp_med"),
+            types.InlineKeyboardButton("سريع 💨 (3 ثواني)", callback_data="u_s_sp_fast"),
+            types.InlineKeyboardButton("شخص خارجي 💻 (ثانية)", callback_data="u_s_sp_ext"),
+            types.InlineKeyboardButton("سرعة قصوى ⚡️ (سطرين/ثانية)", callback_data="u_s_sp_max")
+        )
+        user_bot.edit_message_text("اختر السرعة الخاصة بالفرديات:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        
+    elif data.startswith("u_s_sp_"):
+        sp_map = {"u_s_sp_slow": "بطيء", "u_s_sp_med": "متوسط", "u_s_sp_fast": "سريع", "u_s_sp_ext": "شخص خارجي", "u_s_sp_max": "سرعة قصوى"}
+        cursor.execute("UPDATE users SET sing_speed = ? WHERE user_id = ?", (sp_map[data], user_id))
+        conn.commit()
+        user_bot.answer_callback_query(call.id, f"تم ضبط سرعة الفرديات إلى: {sp_map[data]}")
+        show_user_panel(call.message.chat.id, user_id)
+        
+    elif data == "u_back_home":
+        show_user_panel(call.message.chat.id, user_id)
+        
+    conn.close()
+
+def u_save_name(message):
+    user_id = message.from_user.id
+    name = message.text.strip()
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET custom_name = ? WHERE user_id = ?", (name, user_id))
+    conn.commit()
+    conn.close()
+    user_bot.reply_to(message, f"تم حفظ اسمك المخصص: ({name}) بنجاح! ✅")
+    show_user_panel(message.chat.id, user_id)
+
+def u_save_kw(message, col_name):
+    user_id = message.from_user.id
+    kw = message.text.strip()
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE users SET {col_name} = ? WHERE user_id = ?", (kw, user_id))
+    conn.commit()
+    conn.close()
+    user_bot.reply_to(message, f"تم حفظ الكلمة المفتاحية: ({kw}) بنجاح! ✅")
+    show_user_panel(message.chat.id, user_id)
 
 
-# ==================== بوت التحكم (Admin Bot) ====================
+# ==============================================================================
+#                               بوت التحكم (Admin Bot)
+# ==============================================================================
 
 @admin_bot.message_handler(commands=['start', 'admin'])
 def admin_panel(message):
@@ -174,18 +332,15 @@ def admin_panel(message):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(toggle_text, callback_data="toggle_bot"),
-        types.InlineKeyboardButton("السرعة ⚡️", callback_data="set_speed"),
-        types.InlineKeyboardButton("كلمة التشغيل ▶️", callback_data="set_start_kw"),
-        types.InlineKeyboardButton("كلمة الإيقاف ⏹️", callback_data="set_stop_kw"),
-        types.InlineKeyboardButton("الاسم ✏️", callback_data="set_name"),
-        types.InlineKeyboardButton("السطور 📝", callback_data="manage_lines"),
-        types.InlineKeyboardButton("الفرديات 📖", callback_data="manage_singulars"),
-        types.InlineKeyboardButton("المشتركين 👥", callback_data="list_subscribers"),
-        types.InlineKeyboardButton("كلمة عامة 📢", callback_data="broadcast_msg")
+        types.InlineKeyboardButton(toggle_text, callback_data="adm_toggle_bot"),
+        types.InlineKeyboardButton("السرعة ⚡️", callback_data="adm_speed"),
+        types.InlineKeyboardButton("السطور 📝", callback_data="adm_lines_menu"),
+        types.InlineKeyboardButton("الفرديات 📖", callback_data="adm_sing_menu"),
+        types.InlineKeyboardButton("المشتركين 👥", callback_data="adm_subscribers"),
+        types.InlineKeyboardButton("كلمة عامة 📢", callback_data="adm_broadcast")
     )
     
-    admin_bot.send_message(message.chat.id, "🛠️ **لوحة تحكم المشرف الأساسية:**", reply_markup=markup, parse_mode="Markdown")
+    admin_bot.send_message(message.chat.id, "🛠️ **لوحة تحكم المشرف والمالك الأساسية:**", reply_markup=markup, parse_mode="Markdown")
 
 @admin_bot.callback_query_handler(func=lambda call: True)
 def admin_callbacks(call):
@@ -196,145 +351,123 @@ def admin_callbacks(call):
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     cursor = conn.cursor()
     
-    if data.startswith("accept_") or data.startswith("reject_"):
+    # معالجة قبول / رفض الطلبات
+    if data.startswith("acc_") or data.startswith("rej_"):
         parts = data.split("_")
-        action = parts[1]
-        user_id = int(parts[2])
+        action = parts[0]
+        dur = parts[1] if len(parts) == 3 else ""
+        user_id = int(parts[-1])
         
         current_time = time.time()
-        expiry_time = 0
         
-        if action == "1d":
-            expiry_time = current_time + 86400
-            dur_text = "يوم واحد"
-        elif action == "1w":
-            expiry_time = current_time + (86400 * 7)
-            dur_text = "أسبوع"
-        elif action == "1m":
-            expiry_time = current_time + (86400 * 30)
-            dur_text = "شهر"
-        elif action == "forever":
-            expiry_time = 0 # للأبد
-            dur_text = "للأبد"
-            
-        if action == "reject":
+        if action == "rej":
             cursor.execute("UPDATE users SET status = 'rejected', request_time = ? WHERE user_id = ?", (current_time, user_id))
             conn.commit()
-            user_bot.send_message(user_id, "تم رفض طلبك من قبل المالك. يمكنك المحاولة مرة أخرى بعد 5 دقائق.")
+            user_bot.send_message(user_id, "❌ تم رفض طلبك من قبل المالك. يمكنك إعادة إرسال الطلب بعد مرور 5 دقائق كاملة.")
             admin_bot.edit_message_text("تم رفض الطلب بنجاح ❌", call.message.chat.id, call.message.message_id)
         else:
-            cursor.execute("UPDATE users SET status = 'active', expiry_time = ? WHERE user_id = ?", (expiry_time, user_id))
+            exp_time = 0
+            dur_text = ""
+            if dur == "1d":
+                exp_time = current_time + 86400
+                dur_text = "يوم واحد"
+            elif dur == "1w":
+                exp_time = current_time + (86400 * 7)
+                dur_text = "أسبوع"
+            elif dur == "1m":
+                exp_time = current_time + (86400 * 30)
+                dur_text = "شهر"
+            elif dur == "forever":
+                exp_time = 0
+                dur_text = "للأبد حتى الطرد"
+                
+            cursor.execute("UPDATE users SET status = 'active', expiry_time = ? WHERE user_id = ?", (exp_time, user_id))
             conn.commit()
-            user_bot.send_message(user_id, f"تم قبول طلبك بنجاح! البوت مفعل لمدة: {dur_text} 🎉")
-            admin_bot.edit_message_text(f"تم قبول المستخدم بنجاح لمدة ({dur_text}) ✅", call.message.chat.id, call.message.message_id)
+            user_bot.send_message(user_id, f"🎉 تم قبول طلبك بنجاح! البوت مفعل عندك لمدة: {dur_text}.\nأرسل /start لعرض قائمة الإعدادات والأزرار.")
+            admin_bot.edit_message_text(f"تم قبول المستخدم بنجاح لمدة: ({dur_text}) ✅", call.message.chat.id, call.message.message_id)
             
-    elif data == "toggle_bot":
-        current = get_setting("bot_active")
-        new_val = "0" if current == "1" else "1"
-        set_setting("bot_active", new_val)
-        admin_bot.answer_callback_query(call.id, "تم تغيير حالة البوت بنجاح")
+    elif data == "adm_toggle_bot":
+        curr = get_setting("bot_active")
+        new_v = "0" if curr == "1" else "1"
+        set_setting("bot_active", new_v)
+        admin_bot.answer_callback_query(call.id, "تم تغيير حالة البوت العامة")
         admin_panel(call.message)
         
-    elif data == "set_speed":
+    elif data == "adm_speed":
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            types.InlineKeyboardButton("بطيء 🐢 (كل 10 ثواني)", callback_data="speed_slow"),
-            types.InlineKeyboardButton("متوسط 🏃 (كل 5 ثواني)", callback_data="speed_med"),
-            types.InlineKeyboardButton("سريع 💨 (كل 3 ثواني)", callback_data="speed_fast"),
-            types.InlineKeyboardButton("شخص خارجي 💻 (كل ثانية)", callback_data="speed_ext"),
-            types.InlineKeyboardButton("سرعة قصوى ⚡️ (سطرين بالثانية)", callback_data="speed_max"),
-            types.InlineKeyboardButton("عودة 🔙", callback_data="back_home")
+            types.InlineKeyboardButton("بطيء 🐢 (كل 10 ثواني)", callback_data="adm_sp_slow"),
+            types.InlineKeyboardButton("متوسط 🏃 (كل 5 ثواني)", callback_data="adm_sp_med"),
+            types.InlineKeyboardButton("سريع 💨 (كل 3 ثواني)", callback_data="adm_sp_fast"),
+            types.InlineKeyboardButton("شخص خارجي 💻 (كل ثانية)", callback_data="adm_sp_ext"),
+            types.InlineKeyboardButton("سرعة قصوى ⚡️ (سطرين بالثانية)", callback_data="adm_sp_max"),
+            types.InlineKeyboardButton("عودة 🔙", callback_data="adm_back")
         )
-        admin_bot.edit_message_text("اختر السرعة المطلوبة:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        admin_bot.edit_message_text("اختر السرعة المطلوبة العامة للسطور:", call.message.chat.id, call.message.message_id, reply_markup=markup)
         
-    elif data.startswith("speed_"):
-        speed_map = {
-            "speed_slow": "بطيء",
-            "speed_med": "متوسط",
-            "speed_fast": "سريع",
-            "speed_ext": "شخص خارجي",
-            "speed_max": "سرعة قصوى"
-        }
-        set_setting("speed", speed_map[data])
-        admin_bot.answer_callback_query(call.id, f"تم ضبط السرعة إلى: {speed_map[data]}")
+    elif data.startswith("adm_sp_"):
+        sp_map = {"adm_sp_slow": "بطيء", "adm_sp_med": "متوسط", "adm_sp_fast": "سريع", "adm_sp_ext": "شخص خارجي", "adm_sp_max": "سرعة قصوى"}
+        set_setting("speed", sp_map[data])
+        admin_bot.answer_callback_query(call.id, f"تم ضبط السرعة إلى: {sp_map[data]}")
         admin_panel(call.message)
         
-    elif data == "manage_lines":
+    elif data == "adm_lines_menu":
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
-            types.InlineKeyboardButton("ذكر 🧍‍♂️", callback_data="edit_words_ذكر"),
-            types.InlineKeyboardButton("أنثى 🧍‍♀️", callback_data="edit_words_أنثى"),
-            types.InlineKeyboardButton("عودة 🔙", callback_data="back_home")
+            types.InlineKeyboardButton("ذكر 🧍‍♂️", callback_data="adm_words_ذكر"),
+            types.InlineKeyboardButton("أنثى 🧍‍♀️", callback_data="adm_words_أنثى"),
+            types.InlineKeyboardButton("عودة 🔙", callback_data="adm_back")
         )
-        admin_bot.edit_message_text("اختر الجنس لإدارة السطور والكلمات الخاصة به:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        admin_bot.edit_message_text("اختر الجنس للسطور لإدخال الكلمات الخاصة به:", call.message.chat.id, call.message.message_id, reply_markup=markup)
         
-    elif data.startswith("edit_words_"):
+    elif data.startswith("adm_words_"):
         gender = data.split("_")[2]
-        msg = admin_bot.send_message(call.message.chat.id, f"أرسل الكلمات الخاصة بـ ({gender}) مفصولة بفواصل (مثال: هاي,السلام,عليكم):")
-        admin_bot.register_next_step_handler(msg, save_word_list, gender)
+        msg = admin_bot.send_message(call.message.chat.id, f"أرسل الكلمات الخاصة بـ ({gender}) بنفس الطريقة والتنسيق (مثال: هاي,السلام, عليكم):")
+        admin_bot.register_next_step_handler(msg, adm_save_words, gender)
         
-    elif data == "manage_singulars":
-        msg = admin_bot.send_message(call.message.chat.id, "أرسل الفرديات الجديدة المطلوبة:")
-        admin_bot.register_next_step_handler(msg, save_singulars_handler)
+    elif data == "adm_sing_menu":
+        msg = admin_bot.send_message(call.message.chat.id, "أرسل الفرديات الجديدة المراد حفظها بأسلوب الكلمات:")
+        admin_bot.register_next_step_handler(msg, adm_save_sing)
         
-    elif data == "list_subscribers":
-        cursor.execute("SELECT user_id, username, status, request_time FROM users")
+    elif data == "adm_subscribers":
+        cursor.execute("SELECT user_id, username, phone, last_active, status FROM users")
         users = cursor.fetchall()
         if not users:
             admin_bot.answer_callback_query(call.id, "لا يوجد مشتركين حالياً.")
             conn.close()
             return
-        
-        text = "👥 **قائمة المشتركين:**\n\n"
-        for u in users:
-            uid, uname, ustat, rtime = u
-            text += f"👤 @{uname}\n🆔 `{uid}`\nحالة النشاط: {ustat}\n------------------\n"
             
+        text = "👥 **بيانات المشتركين:**\n\n"
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("طرد مشترك (أرسل الآي دي)", callback_data="kick_user_prompt"))
-        markup.add(types.InlineKeyboardButton("عودة 🔙", callback_data="back_home"))
-        admin_bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        for u in users:
+            uid, uname, phone, last_act, ustat = u
+            act_str = f"قبل {int((time.time() - last_act)/60)} دقيقة" if last_act > 0 else "لم يستخدم البوت بعد"
+            text += f"المستخدم: @{uname}\nرقمه: {phone}\nحالة النشاط: ({act_str})\nالحالة: {ustat}\n------------------\n"
+            markup.add(types.InlineKeyboardButton(f"طرد @{uname} 🚫", callback_data=f"adm_kick_{uid}"))
+            
+        markup.add(types.InlineKeyboardButton("عودة 🔙", callback_data="adm_back"))
+        admin_bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
         
-    elif data == "kick_user_prompt":
-        msg = admin_bot.send_message(call.message.chat.id, "أرسل آي دي (ID) المستخدم المراد طرده:")
-        admin_bot.register_next_step_handler(msg, kick_user_handler)
-        
-    elif data == "broadcast_msg":
-        msg = admin_bot.send_message(call.message.chat.id, "أرسل الكلمة أو الرسالة العامة التي تريد إرسالها لجميع المشتركين:")
-        admin_bot.register_next_step_handler(msg, broadcast_handler)
-        
-    elif data == "set_start_kw":
-        msg = admin_bot.send_message(call.message.chat.id, "أرسل كلمة التشغيل الجديدة:")
-        admin_bot.register_next_step_handler(msg, lambda m: update_setting_handler(m, "start_keyword"))
-        
-    elif data == "set_stop_kw":
-        msg = admin_bot.send_message(call.message.chat.id, "أرسل كلمة الإيقاف الجديدة:")
-        admin_bot.register_next_step_handler(msg, lambda m: update_setting_handler(m, "stop_keyword"))
-        
-    elif data == "set_name":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("إزالة اسم الشخص ❌", callback_data="remove_custom_name"))
-        markup.add(types.InlineKeyboardButton("عودة 🔙", callback_data="back_home"))
-        msg = admin_bot.send_message(call.message.chat.id, "أرسل الاسم الذي تريد إضافته مع السطور أو اختر إزالة:", reply_markup=markup)
-        admin_bot.register_next_step_handler(msg, save_custom_name_handler)
-        
-    elif data == "remove_custom_name":
-        cursor.execute("UPDATE users SET custom_name = ''")
+    elif data.startswith("adm_kick_"):
+        target_id = int(data.split("_")[2])
+        cursor.execute("UPDATE users SET status = 'kicked' WHERE user_id = ?", (target_id,))
         conn.commit()
-        admin_bot.answer_callback_query(call.id, "تم إزالة الاسم المخصص بنجاح.")
+        admin_bot.answer_callback_query(call.id, "تم طرد المشترك فوراً 🚫")
+        user_bot.send_message(target_id, "تم طردك وإيقاف حسابك من البوت بواسطة المالك.")
         admin_panel(call.message)
         
-    elif data == "back_home":
+    elif data == "adm_broadcast":
+        msg = admin_bot.send_message(call.message.chat.id, "أرسل الكلمة العامة ليتم إرسالها للجميع فورا:")
+        admin_bot.register_next_step_handler(msg, adm_broadcast_send)
+        
+    elif data == "adm_back":
         admin_panel(call.message)
         
     conn.close()
 
-def save_word_list(message, gender):
-    if message.from_user.id != ADMIN_ID:
-        return
-    text = message.text
-    words = [w.strip() for w in text.split(",") if w.strip()]
-    
+def adm_save_words(message, gender):
+    if message.from_user.id != ADMIN_ID: return
+    words = [w.strip() for w in message.text.split(",") if w.strip()]
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM words WHERE gender = ?", (gender,))
@@ -342,112 +475,78 @@ def save_word_list(message, gender):
         cursor.execute("INSERT INTO words (gender, word) VALUES (?, ?)", (gender, w))
     conn.commit()
     conn.close()
-    
-    admin_bot.reply_to(message, f"تم حفظ السطور الخاصة بـ ({gender}) بنجاح! ✅")
+    admin_bot.reply_to(message, f"تم حفظ الكلمات الخاصة بـ ({gender}) بنجاح ✅")
 
-def save_singulars_handler(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    text = message.text
+def adm_save_sing(message):
+    if message.from_user.id != ADMIN_ID: return
+    words = [w.strip() for w in message.text.split(",") if w.strip()]
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO singulars (word) VALUES (?)", (text,))
+    cursor.execute("DELETE FROM singulars")
+    for w in words:
+        cursor.execute("INSERT INTO singulars (word) VALUES (?)", (w,))
     conn.commit()
     conn.close()
     admin_bot.reply_to(message, "تم حفظ الفرديات بنجاح ✅")
 
-def kick_user_handler(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    try:
-        target_id = int(message.text.strip())
-        conn = sqlite3.connect("bot_database.db", check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET status = 'kicked' WHERE user_id = ?", (target_id,))
-        conn.commit()
-        conn.close()
-        admin_bot.reply_to(message, f"تم طرد المستخدم ذو الآي دي {target_id} بنجاح 🚫")
-        user_bot.send_message(target_id, "تم طردك من البوت بواسطة المالك.")
-    except Exception as e:
-        admin_bot.reply_to(message, f"حدث خطأ: {e}")
-
-def broadcast_handler(message):
-    if message.from_user.id != ADMIN_ID:
-        return
+def adm_broadcast_send(message):
+    if message.from_user.id != ADMIN_ID: return
     text = message.text
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users WHERE status = 'active'")
-    active_users = cursor.fetchall()
+    users = cursor.fetchall()
     conn.close()
     
     count = 0
-    for u in active_users:
+    for u in users:
         try:
             user_bot.send_message(u[0], text)
             count += 1
-        except:
-            pass
-            
-    admin_bot.reply_to(message, f"تم إرسال الكلمة العامة بنجاح إلى {count} مشترك نشط 📢")
-
-def update_setting_handler(message, key):
-    if message.from_user.id != ADMIN_ID:
-        return
-    set_setting(key, message.text.strip())
-    admin_bot.reply_to(message, "تم التحديث بنجاح ✅")
-
-def save_custom_name_handler(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    name = message.text.strip()
-    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET custom_name = ?", (name,))
-    conn.commit()
-    conn.close()
-    admin_bot.reply_to(message, f"تم حفظ الاسم المخصص ({name}) بنجاح ✅")
+        except: pass
+    admin_bot.reply_to(message, f"تم إرسال الكلمة العامة لـ {count} مشترك بنجاح 📢")
 
 
-# ==================== خادم Flask لمنع وضع النوم (Keep-Alive) ====================
+# ==============================================================================
+#                 خادم Flask للحفاظ على عمل البوت 24/7 دون نوم
+# ==============================================================================
 
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running and active!"
+    return "Bot is active & running 24/7!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
 
-# ==================== التشغيل المتزامن للبوتات وخادم الويب ====================
+# ==============================================================================
+#                              التشغيل المتزامن
+# ==============================================================================
 
-def run_admin_bot():
+def run_admin():
     while True:
         try:
             admin_bot.infinity_polling(timeout=60, long_polling_timeout=60)
-        except Exception as e:
+        except Exception:
             time.sleep(5)
 
-def run_user_bot():
+def run_user():
     while True:
         try:
             user_bot.infinity_polling(timeout=60, long_polling_timeout=60)
-        except Exception as e:
+        except Exception:
             time.sleep(5)
 
 if __name__ == "__main__":
-    # تشغيل خادم الويب في خيط مستقل (Thread) لمنع نوم التطبيق على Render
     t_flask = threading.Thread(target=run_flask)
     t_flask.daemon = True
     t_flask.start()
     
-    # تشغيل بوت التحكم في خيط مستقل
-    t_admin = threading.Thread(target=run_admin_bot)
+    t_admin = threading.Thread(target=run_admin)
     t_admin.daemon = True
     t_admin.start()
     
-    # تشغيل بوت المستخدم في الخيط الرئيسي
-    run_user_bot()
+    run_user()
