@@ -7,7 +7,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 CONTROL_TOKEN = "8936206172:AAEV0LFdeUcwlfXkpIn5JyoTLsImNBnRtWI"
 USER_TOKEN = "8838773401:AAH8gaPm2-VjOhhE6WHO-yqhw1Su1AOlb_g"
-ADMINS = [5885382011]
+ADMINS = [5885382011, 8602800425]
 control_bot = Client("control_bot", api_id=2040, api_hash="b18441a1ff607e10a98a0528b788a122", bot_token=CONTROL_TOKEN)
 user_bot = Client("user_bot", api_id=2040, api_hash="b18441a1ff607e10a98a0528b788a122", bot_token=USER_TOKEN)
 db = {
