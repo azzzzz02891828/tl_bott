@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: telegram-control-userbot
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
-    restartPolicy:
-      onFailure: retry
