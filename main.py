@@ -9,19 +9,17 @@ import telebot
 from telebot import types
 from telethon import TelegramClient, events
 
-# === التوكنات والمعرفات الخاصة بك ===
-USER_BOT_TOKEN = "8986740223:AAHeUWSIsw2VfhE--WUAAs8zui21LBm296o"
-ADMIN_BOT_TOKEN = "8888644906:AAF-qNH50PiACqPJpp0tqIy9CLQFOVHHTkE"
+# === التوكنات والمعرفات الجديدة المحدثة ===
+USER_BOT_TOKEN = "8484163851:AAFOu3xCFkDCja8Xd1xlE8Lhehqt4waGhzc"
+ADMIN_BOT_TOKEN = "8687012043:AAGNTvW_dYiSYW3CQcyIybo6puHnLrtY-c8"
 ADMIN_ID = 5885382011
 
-# إعدادات API لمنصة تليجرام لربط حسابات المستخدمين (يمكن استخدام قيم افتراضية)
 API_ID = 2040
 API_HASH = "b18445a3964f16d4fe7b169106c4be12"
 
 admin_bot = telebot.TeleBot(ADMIN_BOT_TOKEN)
 user_bot = telebot.TeleBot(USER_BOT_TOKEN)
 
-# تخزين مؤقت لعمليات تسجيل الدخول
 login_sessions = {}
 
 # === إنشاء وإعداد قاعدة البيانات SQLite ===
@@ -128,7 +126,6 @@ def user_start(message):
                 user_bot.reply_to(message, "⚠️ انتهت فترة اشتراكك في البوت. يرجى التواصل مع المالك للتجديد.")
                 return
             
-            # إذا كان مقبولاً لكنه لم يدخل رقمه وحسابه بعد
             if not session_str:
                 ask_phone_number(message.chat.id, user_id)
                 return
@@ -454,7 +451,6 @@ def admin_callbacks(call):
             cursor.execute("UPDATE users SET status = 'active', expiry_time = ? WHERE user_id = ?", (exp_time, user_id))
             conn.commit()
             
-            # يطلب منه الآن إدخال رقم هاتفه وكود التحقق
             ask_phone_number(user_id, user_id)
             admin_bot.edit_message_text(f"تم قبول المستخدم بنجاح لمدة: ({dur_text}) ✅", call.message.chat.id, call.message.message_id)
             
